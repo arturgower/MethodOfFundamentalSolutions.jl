@@ -34,6 +34,7 @@ include("results.jl")
 export DisplacementType, TractionType, Elastostatic, Acoustic # types
 export ParticularGravity # types
 include("physics/elastic.jl")
+include("physics/helmholtz.jl")
 include("../plot/plot.jl")
 
 end
