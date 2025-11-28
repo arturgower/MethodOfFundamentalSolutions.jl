@@ -60,7 +60,7 @@ function Simulation(medium::P, bd::BD;
     return Simulation{S,Dim,P,PS,BD}(solver, medium, bd, particular_solution, source_positions, ω)
 end
 
-system_matrix(sim::Simulation) = system_matrix(sim.source_positions, sim.medium, sim.boundary_data)
+system_matrix(sim::Simulation) = system_matrix(sim.source_positions, sim.medium, sim.boundary_data; ω=sim.ω)
 
 function system_matrix(source_positions::Vector{SVector{Dim,Float64}}, medium::P, bd::BoundaryData; ω::Float64=2pi) where {Dim,P<:PhysicalMedium{Dim}}
 
@@ -85,10 +85,8 @@ function solve(sim::Simulation{TikhonovSolver{T}}) where T
 
     forcing = vcat(sim.boundary_data.fields...)
     forcing_particular = field(sim.medium, sim.boundary_data, sim.particular_solution)
-
-    if sim.medium isa Elastostatic
-        forcing = forcing - vcat(forcing_particular...)
-    end
+    forcing = forcing - vcat(forcing_particular...)
+    
 
     # Tikinov solution
     condM = cond(M)

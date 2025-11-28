@@ -62,7 +62,7 @@ function field(field_type::F, medium::P, psol::NoParticularSolution, x::Abstract
     if medium isa Elastostatic
         return SVector(zero(x)...)
     else
-        return SVector([zeros(1) for i in 1:length(x)]...)
+        return  SVector(0.0) #SVector([zeros(1) for i in 1:length(x)]...)
     end
     
 end
