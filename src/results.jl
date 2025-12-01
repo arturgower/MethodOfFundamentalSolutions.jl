@@ -67,12 +67,12 @@ function field(field_type::F, medium::P, psol::NoParticularSolution, x::Abstract
     
 end
 
-function field(field_type::F, fsol::FundamentalSolution, x::AbstractVector, outward_normal::AbstractVector = ones(x |> length)) where F <: FieldType
+function field(field_type::F, fsol::FundamentalSolution, x::AbstractVector, outward_normal::AbstractVector = ones(x |> length); ω::Float64=2pi) where F <: FieldType
 
     outward_normal = SVector(outward_normal...) ./ norm(outward_normal)
     x = SVector(x...)
     Gs = [
-        greens(field_type, fsol.medium, x - p, outward_normal) 
+        greens(field_type, fsol.medium, x - p, outward_normal; ω=ω) 
     for p in fsol.positions]
 
     f = hcat(Gs...) * fsol.coefficients[:]

@@ -90,11 +90,10 @@ function solve(sim::Simulation{TikhonovSolver{T}}) where T
 
     # Tikinov solution
     condM = cond(M)
-    # sqrtλ = if sim.solver.λ < zero(eltype(sim.solver.λ)) 
-    #     condM * sqrt(sim.solver.tolerance)
-    # else sqrt(sim.solver.λ)
-    # end
-    sqrtλ = sqrt(sim.solver.λ)
+    sqrtλ = if sim.solver.λ < zero(eltype(sim.solver.λ)) 
+        condM * sqrt(sim.solver.tolerance)
+    else sqrt(sim.solver.λ)
+    end
 
     bigM = [M; sqrtλ * I];
     coes = bigM \ [forcing; zeros(size(M)[2])]
