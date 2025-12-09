@@ -30,7 +30,7 @@ normals = [[cos(θ), sin(θ)] for θ in θs]
 bd_fields = [[-ϕ(r*cos(θ), r*sin(θ))] for θ in θs]
 interior_points = [[0.0, 0.0]]
     
-bd = BoundaryData(DirichletType(); 
+bd = BoundaryData(TractionType(); 
         boundary_points = bd_points, 
         fields = bd_fields, 
         outward_normals = normals,
@@ -50,7 +50,7 @@ sim=Simulation(medium,bd, solver=solver, source_positions = source_pos;ω=ω)
 
 fsol = solve(sim)
 
-predict_fields = [field(DirichletType(), fsol, bd_points[i], normals[i]; ω=ω) for i in eachindex(bd_points)]
+predict_fields = [field(TractionType(), fsol, bd_points[i], normals[i]; ω=ω) for i in eachindex(bd_points)]
 fields = [-ϕ(r*cos(θ),r*sin(θ)) for θ in θs]
 
 f=vcat(bd.fields...)
@@ -69,7 +69,7 @@ x_vec, inds = points_in_shape(region; res = res)
 xs = x_vec[inds]
 
 fs = [
-    field(DirichletType(), fsol, x, x / norm(x); ω=ω) 
+    field(TractionType(), fsol, x, x / norm(x); ω=ω) 
 for x in xs];
    
 
