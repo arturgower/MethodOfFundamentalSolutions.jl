@@ -60,14 +60,14 @@ function Simulation(medium::P, bd::BD;
     return Simulation{S,Dim,P,PS,BD}(solver, medium, bd, particular_solution, source_positions, ω)
 end
 
-system_matrix(sim::Simulation) = system_matrix(sim.source_positions, sim.medium, sim.boundary_data; ω=sim.ω)
+system_matrix(sim::Simulation) = system_matrix(sim.source_positions, sim.medium, sim.boundary_data)
 
-function system_matrix(source_positions::Vector{SVector{Dim,Float64}}, medium::P, bd::BoundaryData; ω::Float64=2pi) where {Dim,P<:PhysicalMedium{Dim}}
+function system_matrix(source_positions::Vector{SVector{Dim,Float64}}, medium::P, bd::BoundaryData) where {Dim,P<:PhysicalMedium{Dim}}
 
     points = bd.boundary_points
 
     Ms = [
-        greens(bd.fieldtype, medium, points[i] - x, bd.outward_normals[i]; ω=ω)    
+        greens(bd.fieldtype, medium, points[i] - x, bd.outward_normals[i])    
     for i in eachindex(points), x in source_positions]
 
     return mortar(Ms)

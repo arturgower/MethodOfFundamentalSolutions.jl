@@ -8,32 +8,31 @@ using SpecialFunctions
 N_bd = 100;
 r = 1.0;
 x0,y0 = 0.6,0.5;
-ω=12.0;
+ω = 12.0;
 #ϕ(x, y) = exp(im *( ω / medium.c)  *x )
 ϕ(x, y) =hankelh1(0, (ω/medium.c) * sqrt((x-x0)^2 + (y-y0)^2))
 
-rsource=1.8;
-N_sources=100;
+rsource = 1.8;
+N_sources = 100;
 
 λ = 1e-8;
 tolerance = 1e-10;
-
 res = 50;
 
-medium = Acoustic(2; ρ = 1.0, c = 1.0)
+medium = Acoustic(2; ω = ω, ρ = 1.0, c = 1.0)
 θs = LinRange(0,2pi,N_bd+1)[1:N_bd]
 
 bd_points = [[r*cos(θ), r*sin(θ)] for θ in θs]
 normals = [[cos(θ), sin(θ)] for θ in θs]
 bd_fields = [[-ϕ(r*cos(θ), r*sin(θ))] for θ in θs]
 interior_points = [[0.0, 0.0]]
-    
+
 bd = BoundaryData(DirichletType(); 
-        boundary_points = bd_points, 
-        fields = bd_fields, 
-        outward_normals = normals,
-        interior_points = interior_points
-    )
+    boundary_points = bd_points, 
+    fields = bd_fields, 
+    outward_normals = normals,
+    interior_points = interior_points
+)
     
 #Nsources=length(bds[n].boundary_points)
 θsource=LinRange(0,2pi,N_sources+1)[1:(N_sources)]
@@ -42,11 +41,10 @@ source_pos=source_positions(bd; relative_source_distance = 1.0)
 # Solve
 solver = TikhonovSolver(λ = λ, tolerance = tolerance)
 
-sim=Simulation(medium,bd, solver=solver, source_positions = source_pos;ω=ω)
-
+sim=Simulation(medium,bd, solver=solver, source_positions = source_pos)
 fsol = solve(sim)
 
-predict_fields = [field(DirichletType(), fsol, bd_points[i], normals[i]; ω=ω) for i in eachindex(bd_points)]
+predict_fields = [field(DirichletType(), fsol, bd_points[i], normals[i]) for i in eachindex(bd_points)]
 fields = [-ϕ(r*cos(θ),r*sin(θ)) for θ in θs]
 
 f=vcat(bd.fields...)
@@ -103,25 +101,29 @@ end
 gif(anim,"gap-diffraction.gif", fps = 7)
 
 
+# import MultipleScattering: Acoustic
+using MultipleScattering
 
 
+medium2D = MultipleScattering.Acoustic(2; ρ = 1.0, c = 1.0) 
 
 particle_shape = Circle(r)
-particle = Particle(medium, particle_shape)
-#source =  plane_source(medium; direction = [1.0,0.])
-source =  point_source(Acoustic(2;ρ = 0.00001, c = 0.00001), [x0,y0], 1.0)
+particle = Particle(medium2D, particle_shape)
+medium_void = MultipleScattering.Acoustic(2; ρ = 0.00001, c = 0.00001)
+
+source =  point_source(medium_void, [x0,y0], 1.0)
 simulation = FrequencySimulation([particle], source)
 result = run(simulation, region, ω, basis_order=5; res=res)
+
 plot(result, ω; seriestype = :heatmap, field_apply = real, clim=(-1.0,1.0), title = "");
 plot(result, ω; seriestype = :heatmap, field_apply = real, title = "");
 plot!(Circle(r),fill = true, fillcolor = :gray, linecolor = :black)
 
 err0r = [abs.(field_predict.field[i] .- result.field[:][i]) for i in eachindex(field_predict.field)]
 error_field=FieldResult(x_vec,err0r)
-   
 
-#plot(error_field, field_apply = norm, clim=(0.0,1.0))
-    x_vec
+# plot(error_field, field_apply = norm, clim=(0.0,1.0))
+    # x_vec
 #plot!(bd)
 norm.(x_vec)
 hankelh1.(0,(ω/medium.c)*norm.(x_vec))

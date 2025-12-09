@@ -47,7 +47,7 @@ struct ParticularGravity{T} <: ParticularSolution
     end
 end
 
-function greens(traction::TractionType, medium::Elastostatic{2,T}, x::SVector{2,T}, outward_normal::SVector; ω::Float64= 2pi * 1.0) where T
+function greens(traction::TractionType, medium::Elastostatic{2,T}, x::SVector{2,T}, outward_normal::SVector) where T
     n = outward_normal
     μ = medium.ρ * medium.cs^2  
     λ = medium.ρ * medium.cp^2 - 2μ
@@ -63,7 +63,7 @@ function greens(traction::TractionType, medium::Elastostatic{2,T}, x::SVector{2,
     return Σn 
 end
 
-function greens(displace::DisplacementType, medium::Elastostatic{2,T}, x::SVector{2,T}, outward_normal; ω::Float64= 2pi * 1.0) where T
+function greens(displace::DisplacementType, medium::Elastostatic{2,T}, x::SVector{2,T}, outward_normal) where T
     μ = medium.ρ * medium.cs^2  
     λ = medium.ρ * medium.cp^2 - 2μ
 
@@ -78,7 +78,7 @@ function greens(displace::DisplacementType, medium::Elastostatic{2,T}, x::SVecto
     return U
 end
 
-function greens(strain::StrainType, medium::Elastostatic{2,T}, x::SVector{2,T}, strain_direction::SVector; ω::Float64= 2pi * 1.0) where T
+function greens(strain::StrainType, medium::Elastostatic{2,T}, x::SVector{2,T}, strain_direction::SVector) where T
     s = strain_direction
     μ = medium.ρ * medium.cs^2  
     λ = medium.ρ * medium.cp^2 - 2μ

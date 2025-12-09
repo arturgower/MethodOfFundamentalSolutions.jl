@@ -22,7 +22,7 @@ res = 51;
 apply(x) = real(x)
 #apply(x) = imag(x)
 
-medium = Acoustic(2; ρ = 1.0, c = 1.0)
+medium = Acoustic(2; ω = ω,  ρ = 1.0, c = 1.0)
 θs = LinRange(0,2pi,N_bd+1)[1:N_bd]
 
 bd_points = [[r*cos(θ), r*sin(θ)] for θ in θs]
@@ -42,11 +42,11 @@ source_pos=source_positions(bd; relative_source_distance = 1.0)
 # Solve
 solver = TikhonovSolver(λ=λ, tolerance = tolerance)
 
-sim=Simulation(medium,bd, solver=solver, source_positions = source_pos;ω=ω)
+sim=Simulation(medium,bd, solver=solver, source_positions = source_pos)
 
 fsol = solve(sim)
 
-predict_fields = [field(DirichletType(), fsol, bd_points[i], normals[i]; ω=ω) for i in eachindex(bd_points)]
+predict_fields = [field(DirichletType(), fsol, bd_points[i], normals[i]) for i in eachindex(bd_points)]
 fields = [-ϕ(r*cos(θ),r*sin(θ)) for θ in θs]
 
 f=vcat(bd.fields...)
@@ -65,7 +65,7 @@ x_vec, inds = points_in_shape(bd; res = res)
 xs = x_vec[inds]
 
 fs = [
-    field(DirichletType(), fsol, x, x / norm(x); ω=ω) 
+    field(DirichletType(), fsol, x, x / norm(x)) 
 for x in xs];
     
 field_mat = [[0.0+0.0im] for x in x_vec]

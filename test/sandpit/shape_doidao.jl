@@ -24,7 +24,7 @@ apply(x) = real(x)
 
 radius(θ)=1.5+0.3*sin(3*θ)+0.15*sin(5θ+0.6*sin(2θ))
 
-medium = Acoustic(2; ρ = 1.0, c = 1.0)
+medium = Acoustic(2; ω = ω, ρ = 1.0, c = 1.0)
 θs = LinRange(0,2pi,N_bd+1)[1:N_bd]
 
 bd_points = [[radius(θ)*cos(θ), radius(θ)*sin(θ)] for θ in θs]
@@ -47,18 +47,17 @@ bdplot=BoundaryData(DirichletType();
     )    
 #Nsources=length(bds[n].boundary_points)
 source_pos=source_positions(bd; relative_source_distance = 1.0)
-rsource(θ) = radius(θ)+ 0.2
+rsource2(θ) = radius(θ)+ 0.2
 θsource=LinRange(0,2pi,N_sources+1)[1:(N_sources)]
-source_pos=[ [rsource(θ)*cos(θ), rsource(θ)*sin(θ)] for θ in θsource ]
+source_pos=[ [rsource2(θ)*cos(θ), rsource2(θ)*sin(θ)] for θ in θsource ]
 # Solve
 #solver = TikhonovSolver(tolerance = tolerance)
 solver = TikhonovSolver(λ=λ, tolerance = tolerance)
 
-sim=Simulation(medium,bd, solver=solver, source_positions = source_pos;ω=ω)
-
+sim=Simulation(medium,bd, solver=solver, source_positions = source_pos)
 fsol = solve(sim)
 
-predict_fields = [field(DirichletType(), fsol, bd_points[i], normals[i]; ω=ω) for i in eachindex(bd_points)]
+predict_fields = [field(DirichletType(), fsol, bd_points[i], normals[i]) for i in eachindex(bd_points)]
 fields = [-ϕ(r*cos(θ),r*sin(θ)) for θ in θs]
 
 f=vcat(bd.fields...)
@@ -77,10 +76,8 @@ x_vec, inds = points_in_shape(region; res = res)
 xs = x_vec[inds]
 
 fs = [
-    field(DirichletType(), fsol, x, x / norm(x); ω=ω) 
+    field(DirichletType(), fsol, x, x / norm(x)) 
 for x in xs];
-   
-
 
 field_mat = [[0.0+0.0im] for x in x_vec]
 field_mat[inds] = [[fs[i][1]] for i in eachindex(fs)];
@@ -99,9 +96,9 @@ plot(field_predict, clim=(minc,maxc))
 plot(field_scat, clim=(minc,maxc));
 plot!(Circle(r),fill = true, fillcolor = :gray, linecolor = :black)
 #plot!(fsol,color="gold")
-plot!(bdplot)
+# plot(bdplot)
 #plot!(bd)
-err0r = [field_scat.field[i] .- apply.(result.field[:][i]) for i in eachindex(field_predict.field)]
-error_field=FieldResult(x_vec,err0r)
-plot(error_field, field_apply = norm, clim=(0.0,1.0))
-plot!(Circle(r),fill = true, fillcolor = :gray, linecolor = :black)
+# err0r = [field_scat.field[i] .- apply.(result.field[:][i]) for i in eachindex(field_predict.field)]
+# error_field=FieldResult(x_vec,err0r)
+# plot(error_field, field_apply = norm, clim=(0.0,1.0))
+# plot!(Circle(r),fill = true, fillcolor = :gray, linecolor = :black)
