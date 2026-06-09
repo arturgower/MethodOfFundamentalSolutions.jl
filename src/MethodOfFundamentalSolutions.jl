@@ -6,6 +6,11 @@ using BlockArrays: mortar
 using StaticArrays: SVector
 using MultipleScattering
 using SpecialFunctions: hankelh1,besselj
+using Distributions
+using ForwardDiff
+using Optim
+using ADTypes
+using Plots
 
 import MultipleScattering: PhysicalMedium, ScalarMedium, spatial_dimension, field_dimension, Shape, Box, bounding_box, points_in_shape, cartesian_to_radial_coordinates, radial_to_cartesian_transform, cartesian_to_radial_transform, field
 export cartesian_to_radial_coordinates, radial_to_cartesian_transform, cartesian_to_radial_transform
@@ -20,7 +25,7 @@ export BoundaryData  # types
 export outward_normals, points_in_shape
 include("boundarydata.jl")
 
-export interior_points_along_coordinate
+export interior_points_along_coordinate, flat_to_pos_matrix
 include("utils.jl")
 
 export Simulation, ParticularSolution, TikhonovSolver # types
@@ -32,10 +37,16 @@ export FieldResult, FundamentalSolution
 export field # types
 include("results.jl")
 
-export DisplacementType, TractionType, Elastostatic, Acoustic
+export DisplacementType, TractionType, Elastostatic, Acoustic, DirichletType, NeumannType, laplace_M, laplace_grad_M # types and functions
 export ParticularGravity # types
 include("physics/elastic.jl")
 include("physics/acoustic.jl")
+include("physics/laplace.jl")
+
+export log_marginal_likelihood, optimize_hyperparameters, compute_coefficient_posterior, reconstruct_full_field, compute_Cx, compute_Cx_analytical # Bayesian functions
+include("bayesian.jl")
+export  plot_reconstructed_fields_mean, plot_reconstructed_fields_variance, plot_reconstructed_fields
 include("../plot/plot.jl")
+
 
 end

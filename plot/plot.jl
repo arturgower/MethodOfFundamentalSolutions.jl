@@ -168,3 +168,170 @@ end
     end
 
 end
+
+function plot_reconstructed_fields(
+    points_flat, 
+    mean_field, 
+    variance_field, 
+    boundary_positions_flat;          # Semicolon marks the start of keyword arguments
+    source_positions_flat = nothing   # Defaults to nothing if omitted
+)
+    
+    # 1. Extract X and Y coordinates using your reshaping function
+    pos_matrix = flat_to_pos_matrix(points_flat)
+    x_pts, y_pts = pos_matrix[1, :], pos_matrix[2, :]
+
+    boundary_positions_matrix = flat_to_pos_matrix(boundary_positions_flat)
+    x_boundary, y_boundary = boundary_positions_matrix[1, :], boundary_positions_matrix[2, :]
+
+    # 2. Plot Left: Reconstructed Mean Field
+    p1 = scatter(x_pts, y_pts, 
+                 zcolor=mean_field, 
+                 colorbar=true,
+                 cmap=:balance,              
+                 markersize=5,
+                 markerstrokewidth=0,        
+                 label="",
+                 aspect_ratio=:equal,
+                 xlabel="X", ylabel="Y",
+                 title="Mean Field Intensity",
+                 legend=:outertop
+                 
+                 )
+
+    # Overlay the boundary line on Left plot
+    plot!(p1, x_boundary, y_boundary, color=:black, linestyle=:dash, linewidth=1.5, label="r = 1")
+
+    # 3. Plot Right: Reconstructed Variance Field (Uncertainty)
+    p2 = scatter(x_pts, y_pts, 
+                 zcolor=variance_field, 
+                 colorbar=true,
+                 cmap=:inferno,              
+                 markersize=5,
+                 markerstrokewidth=0, 
+                 label="",
+                 aspect_ratio=:equal,
+                 xlabel="X", ylabel="Y",
+                 title="Field Variance (Uncertainty)",
+                 legend=:outertop)
+
+    # Overlay the boundary line on Right plot
+    plot!(p2, x_boundary, y_boundary, color=:black, linestyle=:dash, linewidth=1.5, label="r = 1")
+
+    # 4. Optional: Overlay Sources only if they are provided
+    if source_positions_flat !== nothing && !isempty(source_positions_flat)
+        source_positions_matrix = flat_to_pos_matrix(source_positions_flat)
+        x_sources, y_sources = source_positions_matrix[1, :], source_positions_matrix[2, :]
+        
+        # Explicitly target p1
+        scatter!(p1, x_sources, y_sources, 
+                 label="Sources", 
+                 color=:red, 
+                 markersize=6, 
+                 marker=:circle) 
+        
+        # Explicitly target p2
+        scatter!(p2, x_sources, y_sources, 
+                 label="Sources", 
+                 color=:red, 
+                 markersize=6, 
+                 marker=:circle) 
+    end
+
+    # 5. Combine plots side-by-side
+    full_layout = plot(p1, p2, layout=(1, 2), size=(1150, 550), margin=5Plots.mm)
+
+    return full_layout
+end
+
+function plot_reconstructed_fields_mean(
+    points_flat, 
+    mean_field, 
+    boundary_positions_flat;         # Semicolon marks the start of keyword arguments
+    source_positions_flat = nothing  # Defaults to nothing if omitted
+)
+    
+    # 1. Extract X and Y coordinates using your reshaping function
+    pos_matrix = flat_to_pos_matrix(points_flat)
+    x_pts, y_pts = pos_matrix[1, :], pos_matrix[2, :]
+
+    boundary_positions_matrix = flat_to_pos_matrix(boundary_positions_flat)
+    x_boundary, y_boundary = boundary_positions_matrix[1, :], boundary_positions_matrix[2, :]
+
+    # 2. Plot: Reconstructed Mean Field
+    p1 = scatter(x_pts, y_pts, 
+                 zcolor=mean_field, 
+                 colorbar=true,
+                 cmap=:balance,              
+                 markersize=5,
+                 markerstrokewidth=0,        
+                 label="",
+                 aspect_ratio=:equal,
+                 xlabel="X", ylabel="Y",
+                 title="Mean Field Intensity"
+       )
+
+    # Overlay the unit circle boundary line
+    plot!(p1, x_boundary, y_boundary, color=:black, linestyle=:dash, linewidth=1.5, label="r = 1")
+
+    # 3. Optional: Overlay Sources if provided
+    if source_positions_flat !== nothing && !isempty(source_positions_flat)
+        source_positions_matrix = flat_to_pos_matrix(source_positions_flat)
+        x_sources, y_sources = source_positions_matrix[1, :], source_positions_matrix[2, :]
+        
+        scatter!(p1, x_sources, y_sources, 
+                 label="Sources", 
+                 color=:red, 
+                 markersize=6, 
+                 marker=:circle) 
+    end
+
+    full_layout = plot(p1, layout=(1, 1), size=(450, 450), margin=5Plots.mm)
+    return full_layout
+end
+
+function plot_reconstructed_fields_variance(
+    points_flat,  
+    variance_field, 
+    boundary_positions_flat;         # Semicolon marks the start of keyword arguments
+    source_positions_flat = nothing  # Defaults to nothing if omitted
+)
+    
+    # 1. Extract X and Y coordinates using your reshaping function
+    pos_matrix = flat_to_pos_matrix(points_flat)
+    x_pts, y_pts = pos_matrix[1, :], pos_matrix[2, :]
+
+    boundary_positions_matrix = flat_to_pos_matrix(boundary_positions_flat)
+    x_boundary, y_boundary = boundary_positions_matrix[1, :], boundary_positions_matrix[2, :]
+
+    # 2. Plot: Reconstructed Variance Field
+    p1 = scatter(x_pts, y_pts, 
+                 zcolor=variance_field, 
+                 colorbar=true,
+                 cmap=:inferno,              
+                 markersize=5,
+                 markerstrokewidth=0,        
+                 label="",
+                 aspect_ratio=:equal,
+                 xlabel="X", ylabel="Y",
+                 title="Variance Field Intensity"
+                )
+
+    # Overlay the unit circle boundary line
+    plot!(p1, x_boundary, y_boundary, color=:black, linestyle=:dash, linewidth=1.5, label="r = 1")
+
+    # 3. Optional: Overlay Sources if provided
+    if source_positions_flat !== nothing && !isempty(source_positions_flat)
+        source_positions_matrix = flat_to_pos_matrix(source_positions_flat)
+        x_sources, y_sources = source_positions_matrix[1, :], source_positions_matrix[2, :]
+        
+        scatter!(p1, x_sources, y_sources, 
+                 label="Sources", 
+                 color=:red, 
+                 markersize=6, 
+                 marker=:circle) 
+    end
+
+    full_layout = plot(p1, layout=(1, 1), size=(450, 450), margin=5Plots.mm)
+    return full_layout
+end

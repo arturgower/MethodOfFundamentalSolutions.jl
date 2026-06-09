@@ -36,3 +36,8 @@ function interior_points_along_coordinate(points; offset_percent = 0.1,
 
     return interior_points
 end
+
+function flat_to_pos_matrix(flat_vec)
+    @assert iseven(length(flat_vec)) "The flat vector length must be even to split into 2D positions."
+    return reshape(flat_vec, 2, :)
+end
