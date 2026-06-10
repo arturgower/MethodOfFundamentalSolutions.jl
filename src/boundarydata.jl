@@ -32,6 +32,8 @@ struct BoundaryData{F <: FieldType, Dim, FieldDim} <: Shape{Dim}
     fields::Vector{SVector{FieldDim,Union{Float64, ComplexF64}}}
     outward_normals::Vector{SVector{Dim,Float64}}
     interior_points::Vector{SVector{Dim,Float64}}
+    fields_covariance::Union{AbstractMatrix{Float64}, UniformScaling{Float64}}
+    boundary_points_covariance::Union{AbstractMatrix{Float64}, UniformScaling{Float64}}
 end
 
 function BoundaryData(field_type::F; 
@@ -39,6 +41,8 @@ function BoundaryData(field_type::F;
         fields::Vector{FV} = [p .* 0.0 for p in boundary_points],
         interior_points::Vector = [mean(boundary_points)],
         outward_normals::Vector = outward_normals(boundary_points,interior_points),
+        fields_covariance::Union{AbstractMatrix{Float64}, UniformScaling{Float64}} = I,
+        boundary_points_covariance::Union{AbstractMatrix{Float64}, UniformScaling{Float64}} = I,
     ) where {F <: FieldType, FV <: AbstractVector}
 
     Dim = length(boundary_points[1])
@@ -47,7 +51,7 @@ function BoundaryData(field_type::F;
     # All outward normals should have unit length
     outward_normals = [n / norm(n) for n in outward_normals]
 
-    BoundaryData{F,Dim,FieldDim}(field_type, boundary_points, fields, outward_normals, interior_points)
+    BoundaryData{F,Dim,FieldDim}(field_type, boundary_points, fields, outward_normals, interior_points, fields_covariance, boundary_points_covariance)
 end
 
 import MultipleScattering: name

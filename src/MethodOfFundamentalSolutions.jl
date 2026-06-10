@@ -44,6 +44,7 @@ include("physics/acoustic.jl")
 include("physics/laplace.jl")
 
 export log_marginal_likelihood, optimize_hyperparameters, compute_coefficient_posterior, reconstruct_full_field, compute_Cx, compute_Cx_analytical # Bayesian functions
+export Prior, GaussianPrior # Prior types
 include("bayesian.jl")
 export  plot_reconstructed_fields_mean, plot_reconstructed_fields_variance, plot_reconstructed_fields
 include("../plot/plot.jl")

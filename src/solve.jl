@@ -37,6 +37,16 @@ struct TikhonovSolver{T<:Real} <: AbstractSolver
     end
 end
 
+struct BayesianSolver{T<:Real,P<:Prior} <: AbstractSolver
+    prior::P
+    tolerance::T
+end
+
+function BayesianSolver(prior::P; tolerance=1e-10) where {P<:Prior}
+    T = typeof(tolerance)
+    BayesianSolver{T,P}(prior, tolerance)
+end
+
 struct Simulation{S <: AbstractSolver, Dim, P<:PhysicalMedium{Dim}, PS <:ParticularSolution, BD <: BoundaryData}
     solver::S
     medium::P
@@ -109,6 +119,12 @@ function solve(sim::Simulation{TikhonovSolver{T}}) where T
         relative_boundary_error = relative_error
     )
 end
+
+function solve(sim::Simulation{<:BayesianSolver{<:GaussianPrior}},laplace_M, laplace_grad_M) 
+     error("Bayesian solver not implemented yet")
+end
+
+
 
 """
     source_positions(cloud::BoundaryData; α=1.0)

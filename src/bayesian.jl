@@ -1,3 +1,22 @@
+# Bayesian Inference Routines for MFS Inverse Problems.
+# Defining prior type 
+abstract type Prior end
+
+struct GaussianPrior{Dim, FieldDim} <: Prior
+    mean::Vector{SVector{Dim,Float64}}
+    covariance::Union{AbstractMatrix{Float64}, UniformScaling{Float64}}
+end
+
+function GaussianPrior(
+    mean::Vector{<:AbstractVector{<:Real}},
+    covariance::Union{AbstractMatrix{Float64}, UniformScaling{Float64}}
+)
+    Dim = length(first(mean))
+
+    mean_svec = [SVector{Dim}(v) for v in mean]
+
+    GaussianPrior{Dim, length(mean)}(mean_svec, covariance)
+end
 
 #Helper function to compute the matrix (Cx).
 #Shared across optimization and posterior routines.
