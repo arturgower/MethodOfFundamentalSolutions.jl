@@ -80,7 +80,7 @@ end
 
 system_matrix(sim::Simulation) = system_matrix(sim.source_positions, sim.medium, sim.boundary_data)
 
-function system_matrix(source_positions::Vector{SVector{Dim,Float64}}, medium::P, bd::BoundaryData) where {Dim,P<:PhysicalMedium{Dim}}
+function system_matrix(source_positions::AbstractVector{SVector{Dim,T}}, medium::P, bd::BoundaryData) where {Dim,T,P<:PhysicalMedium{Dim}}
 
     points = bd.boundary_points
 
@@ -128,74 +128,37 @@ function solve(sim::Simulation{TikhonovSolver{T}}) where T
     )
 end
 
-function solve(sim::Simulation{<:BayesianSolver{<:GaussianPrior}},
+function solve(
+    sim::Simulation{<:BayesianSolver{<:GaussianPrior}},
     system_matrix_function::Function; 
     gradient_system_matrix_function::Union{Function, Nothing} = nothing,
-    optimize_source_positions::Bool = false) 
+    optimize_source_positions_flag::Bool = false # Renamed flag slightly to avoid name clash with the function
+) 
     
-    bd = sim.boundary_data
-    prior = sim.solver.prior
-    
-    μ_a = vcat(prior.mean...)
-    Σ_a = prior.covariance_matrix
-    
-
-    
-    g = vcat(sim.boundary_data.fields...)
-    g_particular = field(sim.medium, sim.boundary_data, sim.particular_solution)
-    g = g - vcat(g_particular...)
-    Σ_sensor = bd.fields_covariance
-    
-    x0_sensors = vcat(bd.boundary_points...)
-    Σ_x=bd.boundary_points_covariance
-
-    init_source_positions = vcat(sim.source_positions...)
-
-    if optimize_source_positions
-        if isnothing(gradient_system_matrix_function)
-            # Calculate WITHOUT the analytical gradient function
-       
-            best_source_positions = optimize_hyperparameters(
-                                    g, 
-                                    x0_sensors, 
-                                    Σ_a, 
-                                    Σ_sensor, 
-                                    Σ_x, 
-                                    init_source_positions, 
-                                    system_matrix_function
-                            )
-        # Add your source position optimization logic here
-        
-        else
-            best_source_positions = optimize_hyperparameters(
-                                     g, 
-                                     x0_sensors, 
-                                     Σ_a, 
-                                     Σ_sensor, 
-                                     Σ_x, 
-                                     init_source_positions, 
-                                     system_matrix_function, 
-                                     gradient_system_matrix_function
-                                    )
-        # Add your source position optimization logic here
-            println("Solving with gradient...")
-            # You can call it here: gradient_system_matrix_function(...)
-        end
+    # 1. Determine Source Positions (chi)
+    if optimize_source_positions_flag
+        println("Optimizing source positions...")
+        best_source_positions = optimize_source_positions(
+            sim, system_matrix_function; gradient_system_matrix_function = gradient_system_matrix_function
+        )
     else
-        best_source_positions = init_source_positions 
+        best_source_positions = vcat(sim.source_positions...)
     end
 
-    μ_post, Σ_post = compute_coefficient_posterior(g, x0_sensors, best_source_positions, Σ_a, Σ_sensor, Σ_x, laplace_M, laplace_grad_M)
+    # 2. Compute Posterior Coefficients
+    μ_post, Σ_post = compute_coefficient_posterior(
+        sim, best_source_positions, system_matrix_function; gradient_system_matrix_function = gradient_system_matrix_function
+    )
 
-    return FundamentalSolution(sim.medium; 
+    # 3. Return the solution
+    return FundamentalSolution(
+        sim.medium; 
         positions = best_source_positions,
         coefficients_mean = μ_post, 
         coefficients_covariance = Σ_post,
         particular_solution = sim.particular_solution
     )
-
 end
-
 
 
 """
