@@ -336,11 +336,11 @@ function optimise_source_positions(
     )
     
     if isnothing(physics_gradient)
-        return optimize_hyperparameters(
+        return optimise_hyperparameters(
             g, xb_flat, Σ_a, Σ_sensor, Σ_x, init_source_positions, physics_matrix
         )
     else
-        return optimize_hyperparameters(
+        return optimise_hyperparameters(
             g, xb_flat, Σ_a, Σ_sensor, Σ_x, init_source_positions, physics_matrix, physics_gradient
         )
     end
