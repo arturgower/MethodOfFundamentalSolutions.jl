@@ -13,6 +13,7 @@ struct FundamentalSolution{Dim,P<:PhysicalMedium{Dim}, PS <:ParticularSolution, 
     particular_solution::PS
     positions::Vector{SVector{Dim,T}}
     coefficients::Vector{C}
+    coefficients_covariance::Union{AbstractMatrix{Float64}, UniformScaling{Float64}}
     relative_boundary_error::T
 end
 
@@ -20,6 +21,7 @@ function FundamentalSolution(medium::P;
         particular_solution::PS = NoParticularSolution(),
         positions::Vector{<:AbstractVector} = [zeros(Float64,spatial_dimension(medium))],
         coefficients::AbstractVector = [one(Float64)],
+        coefficients_covariance::Union{AbstractMatrix{Float64}, UniformScaling{Float64}} = 0*I,
         relative_boundary_error = zero(Float64)
     ) where {P<:PhysicalMedium, PS <: ParticularSolution}
     
@@ -45,7 +47,7 @@ function FundamentalSolution(medium::P;
     pos_converted = convert(Vector{SVector{Dim,T}}, positions)
     coef_converted = convert(Vector{C}, coefficients)
 
-    return FundamentalSolution{Dim,P,PS,T,C}(medium, particular_solution, pos_converted, coef_converted, relative_boundary_error)
+    return FundamentalSolution{Dim,P,PS,T,C}(medium, particular_solution, pos_converted, coef_converted, coefficients_covariance, relative_boundary_error)
 end
 
 

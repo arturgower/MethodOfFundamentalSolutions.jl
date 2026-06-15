@@ -37,14 +37,22 @@ struct TikhonovSolver{T<:Real} <: AbstractSolver
     end
 end
 
-struct BayesianSolver{T<:Real,P<:Prior} <: AbstractSolver
+"""
+    BayesianSolver{T<:Real} <: AbstractSolver
+
+Bayesian solver for MFS.
+
+# Parameters
+- `prior::P`: The prior distribution for the solution
+The solution is the posterior distribution over the coefficients given the boundary data and the prior. 
+"""
+
+struct BayesianSolver{P<:Prior} <: AbstractSolver
     prior::P
-    tolerance::T
 end
 
-function BayesianSolver(prior::P; tolerance=1e-10) where {P<:Prior}
-    T = typeof(tolerance)
-    BayesianSolver{T,P}(prior, tolerance)
+function BayesianSolver(prior::P) where {P<:Prior}
+    BayesianSolver{P}(prior)
 end
 
 struct Simulation{S <: AbstractSolver, Dim, P<:PhysicalMedium{Dim}, PS <:ParticularSolution, BD <: BoundaryData}
@@ -120,8 +128,72 @@ function solve(sim::Simulation{TikhonovSolver{T}}) where T
     )
 end
 
-function solve(sim::Simulation{<:BayesianSolver{<:GaussianPrior}},laplace_M, laplace_grad_M) 
-     error("Bayesian solver not implemented yet")
+function solve(sim::Simulation{<:BayesianSolver{<:GaussianPrior}},
+    system_matrix_function::Function; 
+    gradient_system_matrix_function::Union{Function, Nothing} = nothing,
+    optimize_source_positions::Bool = false) 
+    
+    bd = sim.boundary_data
+    prior = sim.solver.prior
+    
+    μ_a = vcat(prior.mean...)
+    Σ_a = prior.covariance_matrix
+    
+
+    
+    g = vcat(sim.boundary_data.fields...)
+    g_particular = field(sim.medium, sim.boundary_data, sim.particular_solution)
+    g = g - vcat(g_particular...)
+    Σ_sensor = bd.fields_covariance
+    
+    x0_sensors = vcat(bd.boundary_points...)
+    Σ_x=bd.boundary_points_covariance
+
+    init_source_positions = vcat(sim.source_positions...)
+
+    if optimize_source_positions
+        if isnothing(gradient_system_matrix_function)
+            # Calculate WITHOUT the analytical gradient function
+       
+            best_source_positions = optimize_hyperparameters(
+                                    g, 
+                                    x0_sensors, 
+                                    Σ_a, 
+                                    Σ_sensor, 
+                                    Σ_x, 
+                                    init_source_positions, 
+                                    system_matrix_function
+                            )
+        # Add your source position optimization logic here
+        
+        else
+            best_source_positions = optimize_hyperparameters(
+                                     g, 
+                                     x0_sensors, 
+                                     Σ_a, 
+                                     Σ_sensor, 
+                                     Σ_x, 
+                                     init_source_positions, 
+                                     system_matrix_function, 
+                                     gradient_system_matrix_function
+                                    )
+        # Add your source position optimization logic here
+            println("Solving with gradient...")
+            # You can call it here: gradient_system_matrix_function(...)
+        end
+    else
+        best_source_positions = init_source_positions 
+    end
+
+    μ_post, Σ_post = compute_coefficient_posterior(g, x0_sensors, best_source_positions, Σ_a, Σ_sensor, Σ_x, laplace_M, laplace_grad_M)
+
+    return FundamentalSolution(sim.medium; 
+        positions = best_source_positions,
+        coefficients_mean = μ_post, 
+        coefficients_covariance = Σ_post,
+        particular_solution = sim.particular_solution
+    )
+
 end
 
 
