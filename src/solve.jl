@@ -51,10 +51,6 @@ struct BayesianSolver{P<:Prior} <: AbstractSolver
     prior::P
 end
 
-function BayesianSolver(prior::P) where {P<:Prior}
-    BayesianSolver{P}(prior)
-end
-
 struct Simulation{S <: AbstractSolver, Dim, P<:PhysicalMedium{Dim}, PS <:ParticularSolution, BD <: BoundaryData}
     solver::S
     medium::P
@@ -129,11 +125,11 @@ function solve(sim::Simulation{TikhonovSolver{T}}) where T
 end
 
 function solve(
-    sim::Simulation{<:BayesianSolver{<:GaussianPrior}},
+    sim::Simulation{<:BayesianSolver{<:GaussianPrior}, Dim},
     system_matrix_function::Function; 
     gradient_system_matrix_function::Union{Function, Nothing} = nothing,
     optimise_source_positions_flag::Bool = false # Renamed flag slightly to avoid name clash with the function
-) 
+) where {Dim}
     
     # 1. Determine Source Positions (chi)
     if optimise_source_positions_flag
@@ -149,12 +145,15 @@ function solve(
     μ_post, Σ_post = compute_coefficient_posterior(
         sim, best_source_positions, system_matrix_function; gradient_system_matrix_function = gradient_system_matrix_function
     )
-
+    new_source_positions = [
+    SVector{Dim, Float64}(best_source_positions[i : i + Dim - 1]) 
+    for i in 1:Dim:length(best_source_positions)
+    ]
     # 3. Return the solution
     return FundamentalSolution(
         sim.medium; 
-        positions = best_source_positions,
-        coefficients_mean = μ_post, 
+        positions = new_source_positions,
+        coefficients = μ_post, 
         coefficients_covariance = Σ_post,
         particular_solution = sim.particular_solution
     )

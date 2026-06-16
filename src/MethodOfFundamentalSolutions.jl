@@ -28,7 +28,11 @@ include("boundarydata.jl")
 export interior_points_along_coordinate, flat_to_pos_matrix
 include("utils.jl")
 
-export Simulation, ParticularSolution, TikhonovSolver # types
+export log_marginal_likelihood, optimise_hyperparameters, compute_coefficient_posterior, reconstruct_full_field, compute_Cx, compute_Cx_analytical # Bayesian functions
+export Prior, GaussianPrior, BayesianSolver # Prior types
+include("bayesian.jl")
+
+export Simulation, ParticularSolution, TikhonovSolver, NoParticularSolution # types
 export greens, source_positions
 export solve, system_matrix
 include("solve.jl")
@@ -43,9 +47,7 @@ include("physics/elastic.jl")
 include("physics/acoustic.jl")
 include("physics/laplace.jl")
 
-export log_marginal_likelihood, optimize_hyperparameters, compute_coefficient_posterior, reconstruct_full_field, compute_Cx, compute_Cx_analytical # Bayesian functions
-export Prior, GaussianPrior # Prior types
-include("bayesian.jl")
+
 export  plot_reconstructed_fields_mean, plot_reconstructed_fields_variance, plot_reconstructed_fields
 include("../plot/plot.jl")
 

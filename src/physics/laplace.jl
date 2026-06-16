@@ -16,7 +16,7 @@ end
 """
 Laplace M_func where hyperparameters (chi) are the 2D coordinates of the sources.
 """
-function laplace_M(medium::P, x_flat::AbstractVector{T}, chi::AbstractVector{T}) where {P<:PhysicalMedium{2}, T<:Real}
+function laplace_M(medium::P, x_flat::AbstractVector{T1}, chi::AbstractVector{T2}) where {P<:PhysicalMedium{2}, T1<:Real, T2<:Real}
     # CRUCIAL FIX: Automatically resolve whether to use Float64 or ForwardDiff.Dual
     NumType = promote_type(eltype(x_flat), eltype(chi))
     
@@ -50,7 +50,7 @@ Computes ∂M/∂x_sensor, where source locations are read from hyperparameter c
 Returns a 3D array of shape (n_sensors, n_sources, 2)
 """
 
-function laplace_grad_M(medium::P, x_flat::AbstractVector{T}, chi::AbstractVector{T}) where {P<:PhysicalMedium{2}, T<:Real}
+function laplace_grad_M(medium::P, x_flat::AbstractVector{T1}, chi::AbstractVector{T2}) where {P<:PhysicalMedium{2}, T1<:Real, T2<:Real}
     # Apply the same type promotion logic here
     NumType = promote_type(eltype(x_flat), eltype(chi))
     

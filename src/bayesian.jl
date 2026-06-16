@@ -193,7 +193,7 @@ function optimise_hyperparameters(
 
     obj(chi) = log_marginal_likelihood(chi, g, xb_flat, Sigma_a, Sigma_sensor, Sigma_x_block, M_func, grad_M_func)
     # Optimization can still use forward-mode AD on the hyperparameter scalar 'chi' itself!
-    res = optimize(obj, init_chi, LBFGS(), autodiff=AutoForwardDiff())
+    res = optimize(obj, Vector(init_chi), LBFGS(), autodiff=AutoForwardDiff())
     return Optim.minimizer(res)
 end
 
@@ -276,12 +276,12 @@ function reconstruct_full_field(
     end
 end
 
-function _extract_bayesian_components(sim::Simulation)
+function _extract_bayesian_components(sim)
     bd = sim.boundary_data
     prior = sim.solver.prior
     
     # Extract Covariances
-    Σ_a = prior.covariance_matrix
+    Σ_a = prior.covariance
     Σ_sensor = bd.fields_covariance
     Σ_x = bd.boundary_points_covariance
     
@@ -297,7 +297,7 @@ function _extract_bayesian_components(sim::Simulation)
     return g, xb_flat, source_positions, Σ_a, Σ_sensor, Σ_x
 end
 
-function _build_physics_closure(func::Union{Function, Nothing}, sim::Simulation, xb_flat, chi_template)
+function _build_physics_closure(func::Union{Function, Nothing}, sim, xb_flat, chi_template)
     # 1. Handle the case where no gradient function is provided
     if isnothing(func)
         return nothing
@@ -321,10 +321,10 @@ end
 
 # Overload for Hyperparameter (Source Position) Optimization
 function optimise_source_positions(
-    sim::Simulation, 
+    sim, 
     system_matrix_function::Function;
     gradient_system_matrix_function::Union{Function, Nothing} = nothing
-)
+) 
     g, xb_flat, init_source_positions, Σ_a, Σ_sensor, Σ_x = _extract_bayesian_components(sim)
     
     # Automatically build the correct closures based on the function passed!
@@ -347,11 +347,11 @@ function optimise_source_positions(
 end
 
 function compute_coefficient_posterior(
-    sim::Simulation, 
+    sim, 
     chi::AbstractVector, 
     system_matrix_function::Function;
     gradient_system_matrix_function::Union{Function, Nothing} = nothing
-)
+) 
     g, xb_flat, _, Σ_a, Σ_sensor, Σ_x = _extract_bayesian_components(sim)
     
     # Automatically build the correct closures
