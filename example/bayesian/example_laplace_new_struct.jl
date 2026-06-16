@@ -1,4 +1,4 @@
-using MultipleScattering
+
 using MethodOfFundamentalSolutions
 using Plots
 using Distributions
@@ -70,20 +70,23 @@ n_sources = 10
 init_source_positions = [SVector{2, Float64}(2.0*cos(θ), 2.0*sin(θ)) for θ in θ_sources]
 
 # Create the Gaussian prior for the coefficients
-prior = GaussianPrior(zeros(n_sources), Σ_a)
+prior_mean = [SVector{1, Float64}(0.0) for _ in 1:n_sources]
+prior = GaussianPrior(prior_mean, Σ_a)
 
 # ==============================================================================
 # 4. Simulation Assembly & Solving
 # ==============================================================================
 # Define the physical medium (Assuming standard acoustic/laplace dummy medium)
-medium = Acoustic(2; ρ=1.0, c=1.0) 
+medium = MethodOfFundamentalSolutions.Acoustic(2; ρ=1.0, c=1.0) 
 
 # Package into Simulation
 sim = Simulation(
-    medium = medium,
-    boundary_data = bd,
+    medium, 
+    bd; 
     solver = BayesianSolver(prior),
-    source_positions = init_source_positions
+    source_positions = init_source_positions,
+    particular_solution = NoParticularSolution(),
+    ω = 2pi * 1.0
 )
 
 # Call the clean solver API we built!
@@ -92,13 +95,14 @@ sol = solve(
     sim, 
     laplace_M; 
     gradient_system_matrix_function = laplace_grad_M, 
-    optimize_source_positions_flag = true
+    optimise_source_positions_flag = true
 )
 
 # ==============================================================================
 # 5. Field Prediction & Verification
 # ==============================================================================
 # Get points inside the unit disk for field prediction
+using MultipleScattering
 grid, idx = points_in_shape(Circle([0.0, 0.0], 1.0))
 points = grid[idx]
 points_flat = vcat(points...)
@@ -108,9 +112,9 @@ best_source_positions_flat = vcat(sol.positions...)
 mean_field, variance_field = reconstruct_full_field(
     points_flat, 
     best_source_positions_flat, 
-    sol.coefficients_mean, 
+    sol.coefficients, 
     sol.coefficients_covariance, 
-    laplace_M
+    (x, y) -> laplace_M(sim.medium, x, y) # <--- The fix
 )
 
 # Compute relative error against the true analytical solution u(x,y) = x
