@@ -31,6 +31,24 @@ function Distributions.MvNormal(dist::GaussianDistribution)
     return MvNormal(flat_mean, pd_cov)
 end
 
+function GaussianDistribution(mv_dist::MvNormal, Dim::Int)
+    # 1. Extract the flat mean vector from the MvNormal distribution
+    flat_mean = mean(mv_dist)
+    
+    # 2. Unflatten the mean back into a Vector of SVectors
+    # We use `reinterpret` to chunk the flat array by `Dim` (e.g., pairs for 2D),
+    # and `collect` to ensure it returns a standard Vector instead of a ReinterpretArray.
+    T = eltype(flat_mean)
+    structured_mean = collect(reinterpret(SVector{Dim, T}, flat_mean))
+    
+    # 3. Extract the raw covariance matrix
+    # The `cov()` function safely unwraps the PDMat back into a standard Matrix
+    cov_mat = cov(mv_dist)
+    
+    # 4. Construct your custom struct
+    return GaussianDistribution(structured_mean, cov_mat)
+end
+
 #Helper function to compute the matrix (Cx).
 #Shared across optimization and posterior routines.
 #Works seamlessly for both scalar and matrix-valued Green's functions.
