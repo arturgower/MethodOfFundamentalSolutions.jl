@@ -34,7 +34,7 @@ export ProbabilityDistribution, GaussianDistribution, BayesianSolver # Prior typ
 include("bayesian.jl")
 
 export Simulation, ParticularSolution, TikhonovSolver, NoParticularSolution # types
-export greens, source_positions
+export greens, source_positions, greens_gradient
 export solve, system_matrix, system_matrix_gradient
 include("solve.jl")
 

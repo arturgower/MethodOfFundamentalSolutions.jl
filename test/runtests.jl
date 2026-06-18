@@ -1,5 +1,5 @@
 using MethodOfFundamentalSolutions
-using Test, Statistics, LinearAlgebra, Distributions, ForwardDiff
+using Test, Statistics, LinearAlgebra, Distributions, ForwardDiff, StaticArrays
 
 include("boundarydata_test.jl")
 include("benchmarks_test.jl")

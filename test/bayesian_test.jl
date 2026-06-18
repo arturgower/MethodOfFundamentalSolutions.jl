@@ -1,82 +1,132 @@
-@testset "calculate_Cx_laplace_convergence_and_consistency_test" begin
-    # 1. Setup physical geometry and distributions
-    θs = range(0, 2π, length=101)[1:end-1]
-    x0_sensors = [cos.(θs)'; sin.(θs)'] # 100 sensors in a circle
-    x0_sensors_flat = x0_sensors[:]
-    n_sensors = length(θs)
+# ==============================================================================
+# 1. Helper Functions to Wrap `greens` for the Matrix/Tensor Builders
+# ==============================================================================
 
-    σ_x = 0.01
-    Σ_x_block = σ_x^2 * I(2) 
-    Σ_x = kron(I(n_sensors), Σ_x_block) 
-
-    noise_x_distribution = MvNormal(zeros(length(x0_sensors_flat)), Σ_x)
-    noise_x = rand(noise_x_distribution)
-    x0_sensors_noisy_flat = x0_sensors_flat + noise_x
-
-    n_sources = 10
-    σ_a = 1.0
-    Σ_a = σ_a^2 * I(n_sources)
-
-    init_source_positions_true = [2.0*cos.(range(0, 2π, length=n_sources+1)[1:end-1])'; 2.0*sin.(range(0, 2π, length=n_sources+1)[1:end-1])'] 
-    init_source_positions_flat = init_source_positions_true[:]
+# Builds the N x K Matrix using the scalar greens function
+# Builds the N x K Matrix using the scalar greens function
+# Builds the N x K Matrix using the scalar greens function
+function build_M(xb_flat::AbstractVector, chi_flat::AbstractVector)
+    N = length(xb_flat) ÷ 2
+    K = length(chi_flat) ÷ 2
     
-    σ_source = 0.00
-    Σ_source_block = σ_source^2 * I(2)
-    Σ_source = kron(I(n_sources), Σ_source_block) 
+    T = promote_type(eltype(xb_flat), eltype(chi_flat))
+    M = zeros(T, N, K)
+    
+    dummy_normal = SVector(0.0, 1.0)
+    
+    for i in 1:N
+        x_i = SVector(xb_flat[2i-1], xb_flat[2i])
+        for j in 1:K
+            s_j = SVector(chi_flat[2j-1], chi_flat[2j])
+            
+            # ---> FIXED: changed sim.medium to medium <---
+            val = greens(DirichletType(), medium, x_i - s_j, dummy_normal)
+            M[i, j] = val[1]
+        end
+    end
+    return M
+end
 
-    source_distribution = MvNormal(init_source_positions_flat, Σ_source)
-    init_source_positions = rand(source_distribution)
+# Builds the N x K x 2 Tensor using the greens_gradient function
+function build_grad_M(xb_flat::AbstractVector, chi_flat::AbstractVector)
+    N = length(xb_flat) ÷ 2
+    K = length(chi_flat) ÷ 2
+    
+    T = promote_type(eltype(xb_flat), eltype(chi_flat))
+    grad_M = zeros(T, N, K, 2)
+    
+    dummy_normal = SVector(0.0, 1.0)
+    
+    for i in 1:N
+        x_i = SVector(xb_flat[2i-1], xb_flat[2i])
+        for j in 1:K
+            s_j = SVector(chi_flat[2j-1], chi_flat[2j])
+            
+            # ---> FIXED: changed sim.medium to medium <---
+            gval = greens_gradient(DirichletType(), medium, x_i - s_j, dummy_normal)
+            
+            grad_M[i, j, 1] = gval[1]
+            grad_M[i, j, 2] = gval[2]
+        end
+    end
+    return grad_M
+end# ==============================================================================
+# 2. Shared Setup Data
+# ==============================================================================
+medium = LaplaceMedium{2, Float64}()
+θs = range(0, 2π, length=101)[1:end-1]
+n_sensors = length(θs)
+x0_sensors = [cos.(θs)'; sin.(θs)'] 
+x0_sensors_flat = x0_sensors[:]
 
-    # Wrap the base M evaluation to fit (xb_flat, chi) -> M
-    M_func = (xb, chi) -> laplace_M(xb, chi)
-    # Wrap your analytical gradient function to fit (xb_flat, chi) -> grad_M tensor
-    grad_M_func = (xb, chi) -> laplace_grad_M(xb, chi)
+σ_x = 0.01
+Σ_x_block = σ_x^2 * I(2) 
+Σ_x = kron(I(n_sensors), Σ_x_block) 
 
-    # 2. Compute Exact Matrices via your two unchanged functions
-    Cx_forwarddiff = compute_Cx(x0_sensors_noisy_flat, init_source_positions, Σ_a, Σ_x_block, M_func)
-    Cx_analytical  = compute_Cx_analytical(x0_sensors_noisy_flat, init_source_positions, Σ_a, Σ_x_block, grad_M_func)
+noise_x_distribution = MvNormal(zeros(length(x0_sensors_flat)), Σ_x)
+noise_x = rand(noise_x_distribution)
+x0_sensors_noisy_flat = x0_sensors_flat + noise_x
+
+n_sources = 10
+σ_a = 1.0
+Σ_a = σ_a^2 * I(n_sources)
+
+init_source_positions_true = [2.0*cos.(range(0, 2π, length=n_sources+1)[1:end-1])'; 2.0*sin.(range(0, 2π, length=n_sources+1)[1:end-1])'] 
+init_source_positions_flat = init_source_positions_true[:]
+
+# Note: Keeping source positions completely flat to match the new builder logic
+init_source_positions = init_source_positions_flat 
+
+# ==============================================================================
+# TEST SET 1: Consistency (ForwardDiff vs Analytical)
+# ==============================================================================
+@testset "calculate_Cx_laplace_consistency_test" begin
+    
+    # 1. Compute Exact Matrices via your wrapper functions
+    Cx_forwarddiff = compute_Cx(x0_sensors_noisy_flat, init_source_positions, Σ_a, Σ_x_block, build_M)
+    Cx_analytical  = compute_Cx_analytical(x0_sensors_noisy_flat, init_source_positions, Σ_a, Σ_x_block, build_grad_M)
 
     # Check 1: The two exact methods must match down to near machine precision
     @test isapprox(Cx_forwarddiff, Cx_analytical, rtol=1e-12, atol=1e-12)
+end
 
-    # 3. Define a vector of shrinking finite-difference step sizes
-    hs = [1e-2, 1e-3, 1e-4, 1e-5]
-    relative_errors = Float64[]
+# ==============================================================================
+# TEST SET 2: Finite-Difference Convergence of the Gradient Tensor
+# ==============================================================================
+@testset "calculate_Cx_laplace_convergence_test" begin
+    
+    Cx_analytical = compute_Cx_analytical(x0_sensors_noisy_flat, init_source_positions, Σ_a, Σ_x_block, build_grad_M)
     norm_analytical = norm(Cx_analytical)
 
+    hs = [1e-2, 1e-3, 1e-4, 1e-5]
+    relative_errors = Float64[]
+
     # Determine dimensions based on the nominal evaluation
-    M_nom = M_func(x0_sensors_noisy_flat, init_source_positions)
+    M_nom = build_M(x0_sensors_noisy_flat, init_source_positions)
     N, K = size(M_nom)
 
-    # 4. Generate finite-difference tensor evaluations to test convergence
     for h in hs
-        # Allocate a 3D tensor to hold the numerical central differences of M
-        # tracking spatial changes per sensor: [N_measurements, K_weights, 2 (x and y)]
         grad_M_num = zeros(N, K, 2)
         
         for s_idx in 1:n_sensors
-            # Indicies for x and y components of the current sensor in the flattened array
             idx_x = 2s_idx - 1
             idx_y = 2s_idx
             
-            # --- Perturb X Coordinate ---
-            x_plus_x = copy(x0_sensors_noisy_flat);  x_plus_x[idx_x] += h
-            x_minus_x = copy(x0_sensors_noisy_flat); x_minus_x[idx_x] -= h
-            M_plus_x = M_func(x_plus_x, init_source_positions)
-            M_minus_x = M_func(x_minus_x, init_source_positions)
+            # Helper to compactly perturb the flat array
+            perturb(flat, i, val) = (out = copy(flat); out[i] += val; out)
             
-            # --- Perturb Y Coordinate ---
-            x_plus_y = copy(x0_sensors_noisy_flat);  x_plus_y[idx_y] += h
-            x_minus_y = copy(x0_sensors_noisy_flat); x_minus_y[idx_y] -= h
-            M_plus_y = M_func(x_plus_y, init_source_positions)
-            M_minus_y = M_func(x_minus_y, init_source_positions)
+            # Perturb X Coordinate
+            M_plus_x  = build_M(perturb(x0_sensors_noisy_flat, idx_x, h), init_source_positions)
+            M_minus_x = build_M(perturb(x0_sensors_noisy_flat, idx_x, -h), init_source_positions)
             
-            # Central difference maps directly into the spatial slices of the tensor
-            # for the specific measurement rows influenced by this sensor
-            for r in 1:N
-                grad_M_num[r, :, 1] .+= (M_plus_x[r, :] - M_minus_x[r, :]) / (2h)
-                grad_M_num[r, :, 2] .+= (M_plus_y[r, :] - M_minus_y[r, :]) / (2h)
-            end
+            # Perturb Y Coordinate
+            M_plus_y  = build_M(perturb(x0_sensors_noisy_flat, idx_y, h), init_source_positions)
+            M_minus_y = build_M(perturb(x0_sensors_noisy_flat, idx_y, -h), init_source_positions)
+            
+            # Because moving sensor `s_idx` ONLY changes row `s_idx` in the M matrix,
+            # we can optimize this by only updating that specific row!
+            grad_M_num[s_idx, :, 1] .= (M_plus_x[s_idx, :] .- M_minus_x[s_idx, :]) ./ (2h)
+            grad_M_num[s_idx, :, 2] .= (M_plus_y[s_idx, :] .- M_minus_y[s_idx, :]) ./ (2h)
         end
 
         # Feed the numerical tensor into your unchanged analytical layout function
@@ -87,14 +137,12 @@
         push!(relative_errors, err)
     end
 
-    # 5. Calculate empirical convergence rates: Δlog(Error) / Δlog(h)
+    # Calculate empirical convergence rates: Δlog(Error) / Δlog(h)
     rates = [log(relative_errors[i+1] / relative_errors[i]) / log(hs[i+1] / hs[i]) for i in 1:(length(hs)-1)]
 
-    # 6. Assertions
-    # A: Error must strictly drop as h gets smaller
-    @test all(diff(relative_errors) .< 0)
+    # Assertions
+    @test all(diff(relative_errors) .< 0) # Error must drop strictly
 
-    # B: Rate must be approximately 2.0 (quadratic convergence of central differences)
     expected_order = 2.0 
     for (j, rate) in enumerate(rates)
         @info "Testing tensor step h = $(hs[j]) -> $(hs[j+1]) | Observed Convergence Rate: $(round(rate, digits=4))"
