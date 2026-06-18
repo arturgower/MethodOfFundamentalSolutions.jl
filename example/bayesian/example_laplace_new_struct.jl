@@ -96,65 +96,42 @@ println("Starting optimization and posterior computation...")
 sol = solve(sim)
 
 # ==============================================================================
-# 5. Field Prediction & Verification
+# 5. Field Prediction 
 # ==============================================================================
 # Get points inside the unit disk for field prediction
 using MultipleScattering
 grid, idx = points_in_shape(Circle([0.0, 0.0], 1.0))
 points = grid[idx]
 
-# Instantly flatten the arrays using reinterpret (zero-cost memory view)
-# and collect() to give you the standard Vector{Float64} you need
-points_flat = collect(reinterpret(Float64, points))
-best_source_positions_flat = collect(reinterpret(Float64, sol.positions))
+fs = [
+    field(DirichletType(), sol, x, x / norm(x)) 
+for x in points];
+    
+field_mat = [[0.0] for x in grid]
+field_mat[idx] = [[fs[i][1]] for i in eachindex(fs)];
 
-# Reconstruct the full field (using your existing utility function)
-mean_field, variance_field = reconstruct_full_field(
-    points_flat, 
-    best_source_positions_flat, 
-    sol.coefficients, 
-    sol.coefficients_covariance, 
-    (x, y) -> laplace_M(sim.medium, x, y) # <--- The fix
-)
+field_predict = FieldResult(grid, [field_mat[i] for i in eachindex(field_mat)]);
 
-# Compute relative error against the true analytical solution u(x,y) = x
-true_field = [p[1] for p in points]
-rel_error = norm(mean_field - true_field) / norm(true_field)
-println("Relative error of the mean field: ", round(rel_error * 100, digits=3), "%")
 
-# ==============================================================================
-# 6. Plotting
-# ==============================================================================
-# Extract x and y coordinates from the optimized source SVectors
-x_sources = [p[1] for p in sol.positions]
-y_sources = [p[2] for p in sol.positions]
+p1 = plot(field_predict, field_apply = first, title = "Predicted Field")
+plot!(sim)
 
-# Plot optimized sources and domain boundary
-scatter(x_sources, y_sources, 
-        label="Optimized Sources", 
-        color=:red, 
-        markersize=6, 
-        marker=:circle, 
-        aspect_ratio=:equal, 
-        grid=true) 
 
-plot!(Circle([0.0, 0.0], 1.0), label="Domain Boundary")
-# savefig("images/laplace_optimized_sources.pdf")
+plot(p1, p2, layout = (1, 2), size = (800, 400))
 
-x0_sensors_flat = vcat(x0_sensors_noisy...)
+covs= [
+    field_covariance(DirichletType(), sol, x, x / norm(x)) 
+for x in points]
 
-# Call your existing plot functions
-plot_reconstructed_fields_mean(
-    points_flat, mean_field, x0_sensors_flat, 
-    source_positions_flat=best_source_positions_flat
-)
+stds = [
+    field_std(DirichletType(), sol, x, x / norm(x))
+        for x in points]
 
-plot_reconstructed_fields_variance(
-    points_flat, variance_field, x0_sensors_flat, 
-    source_positions_flat=best_source_positions_flat
-)
+std_mat = [[0.0] for x in grid]
+std_mat[idx] = [[stds[i][1]] for i in eachindex(stds)];
 
-plot_reconstructed_fields(
-    points_flat, mean_field, variance_field, x0_sensors_flat, 
-    source_positions_flat=best_source_positions_flat
-)
+std_predict = FieldResult(grid, [std_mat[i] for i in eachindex(std_mat)]);
+
+p2 = plot(std_predict, field_apply = first, title = "Standard Deviation")
+
+plot(p1, p2, layout = (1, 2), size = (800, 400))

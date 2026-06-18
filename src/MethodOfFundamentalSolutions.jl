@@ -38,7 +38,7 @@ export solve, system_matrix, system_matrix_gradient
 include("solve.jl")
 
 export FieldResult, FundamentalSolution
-export field # types
+export field, field_covariance, field_std # types
 include("results.jl")
 
 export DisplacementType ,TractionType, Elastostatic, Acoustic, LaplaceMedium, DirichletType, NeumannType, laplace_M, laplace_grad_M # types and functions

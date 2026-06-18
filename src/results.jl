@@ -89,6 +89,42 @@ function field(medium::P, bd::BoundaryData, psol::PS) where {P <: PhysicalMedium
     end
 end
 
+function field_covariance(field_type::F, fsol::FundamentalSolution, x::AbstractVector, outward_normal::AbstractVector = ones(x |> length)) where F <: FieldType
+ 
+    outward_normal = SVector(outward_normal...) ./ norm(outward_normal)
+    x = SVector(x...)
+
+    Gs = [
+        greens(field_type, fsol.medium, x - p, outward_normal) 
+    for p in fsol.positions]
+
+    Phi = hcat(Gs...)
+    
+    # Extract the covariance of the solved coefficients
+    Sigma_post = fsol.coefficients_covariance
+    
+    cov = Phi * Sigma_post * Phi'
+    
+    return cov
+end
+
+function field_std(
+        field_type::F, 
+        fsol::FundamentalSolution, 
+        x::AbstractVector, 
+        outward_normal::AbstractVector = ones(x |> length)
+    ) where F <: FieldType
+    
+    # 1. Get the full covariance matrix at point x
+    cov = field_covariance(field_type, fsol, x, outward_normal)
+    
+    # 2. Extract the variance (diagonal) and take the square root 
+    # The dot (.) broadcasts the sqrt across all diagonal elements
+    std_dev = sqrt.(diag(cov))
+    
+    return std_dev
+end
+
 """
     FieldResult{T<:Real,Dim,FieldDim}
 
