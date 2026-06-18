@@ -40,8 +40,8 @@ function compute_Cx(
     chi::AbstractVector, 
     Sigma_a::AbstractMatrix, 
     Sigma_x_input::AbstractMatrix, 
-    M_func::Function
-) 
+    M_func::F
+) where {F}
 
     M_nom = M_func(xb_flat, chi)
     N, K = size(M_nom) # N: total measurement rows, K: total weight columns
@@ -97,8 +97,8 @@ function compute_Cx_analytical(
     chi::AbstractVector, 
     Sigma_a::AbstractMatrix, 
     Sigma_x_input::AbstractMatrix, 
-    grad_M_func::Function
-) 
+    grad_M_func::F
+) where {F}
 
     # grad_M_func returns a 3D tensor of shape (N_measurements, K_weights, 2)
     grad_M = grad_M_func(xb_flat, chi)
@@ -148,8 +148,8 @@ function log_marginal_likelihood(
     Sigma_a::AbstractMatrix, 
     Sigma_sensor::AbstractMatrix, 
     Sigma_x_block::AbstractMatrix, 
-    M_func::Function
-) 
+    M_func::F
+) where {F}
 
     M_nom = M_func(xb_flat, chi)
     Cx = compute_Cx(xb_flat, chi, Sigma_a, Sigma_x_block, M_func)
@@ -165,9 +165,9 @@ function log_marginal_likelihood(
     Sigma_a::AbstractMatrix, 
     Sigma_sensor::AbstractMatrix, 
     Sigma_x_block::AbstractMatrix, 
-    M_func::Function, 
-    grad_M_func::Function
-) 
+    M_func::F, 
+    grad_M_func::G
+) where {F, G}
 
     M_nom = M_func(xb_flat, chi)
     Cx = compute_Cx_analytical(xb_flat, chi, Sigma_a, Sigma_x_block, grad_M_func)
@@ -185,8 +185,8 @@ function optimise_hyperparameters(
     Sigma_sensor::AbstractMatrix, 
     Sigma_x_block::AbstractMatrix, 
     init_chi::AbstractVector, 
-    M_func::Function
-) 
+    M_func::F
+) where {F}
 
     obj(chi) = log_marginal_likelihood(chi, g, xb_flat, Sigma_a, Sigma_sensor, Sigma_x_block, M_func)
     res = optimize(obj, init_chi, LBFGS(), autodiff=AutoForwardDiff())
@@ -200,9 +200,9 @@ function optimise_hyperparameters(
     Sigma_sensor::AbstractMatrix, 
     Sigma_x_block::AbstractMatrix, 
     init_chi::AbstractVector, 
-    M_func::Function, 
-    grad_M_func::Function
-) 
+    M_func::F, 
+    grad_M_func::G
+) where {F, G}
 
     obj(chi) = log_marginal_likelihood(chi, g, xb_flat, Sigma_a, Sigma_sensor, Sigma_x_block, M_func, grad_M_func)
     # Optimization can still use forward-mode AD on the hyperparameter scalar 'chi' itself!
@@ -220,8 +220,8 @@ function compute_coefficient_posterior(
     Sigma_a::AbstractMatrix, 
     Sigma_sensor::AbstractMatrix, 
     Sigma_x_block::AbstractMatrix, 
-    M_func::Function
-) 
+    M_func::F
+) where {F}
 
     M_nom = M_func(xb_flat, chi)
     Cx = compute_Cx(xb_flat, chi, Sigma_a, Sigma_x_block, M_func)
@@ -244,9 +244,9 @@ function compute_coefficient_posterior(
     Sigma_a::AbstractMatrix, 
     Sigma_sensor::AbstractMatrix, 
     Sigma_x_block::AbstractMatrix, 
-    M_func::Function, 
-    grad_M_func::Function
-) 
+    M_func::F, 
+    grad_M_func::G
+) where {F, G}
 
     M_nom = M_func(xb_flat, chi)
     Cx = compute_Cx_analytical(xb_flat, chi, Sigma_a, Sigma_x_block, grad_M_func)
@@ -268,9 +268,9 @@ function reconstruct_full_field(
     chi::AbstractVector, 
     mu_post::AbstractVector, 
     Sigma_post::AbstractMatrix, 
-    phi_func::Function; 
+    phi_func::F; 
     return_full_cov::Bool=false
-) 
+) where {F}
 
     # Map domain points through your custom function shape template
     Phi = phi_func(x_grid_flat, chi)
@@ -310,19 +310,19 @@ function _extract_bayesian_components(sim)
     return g, xb_flat, source_positions, Σ_a, Σ_sensor, Σ_x
 end
 
-function _build_physics_closure(func::Union{Function, Nothing}, sim, xb_flat, chi_template)
-    # 1. Handle the case where no gradient function is provided
-    if isnothing(func)
-        return nothing
-    end
-    
-    # 2. FLAT SIGNATURE TEST (e.g., laplace_M)
+function _build_physics_closure(::Nothing, sim, xb_flat, chi_template)
+  # 1. Handle the case where no gradient function is provided
+    return nothing
+end
+
+function _build_physics_closure(func, sim, xb_flat, chi_template)
+   # 2. FLAT SIGNATURE TEST (e.g., laplace_M)
     # Does the function accept (medium, flat_sensors, flat_sources)?
     if applicable(func, sim.medium, xb_flat, chi_template)
         return (xb, chi) -> func(sim.medium, xb, chi)
     end
     
-    # 3. STRUCTURED SIGNATURE FALLBACK (e.g., your system_matrix)
+   # 3. STRUCTURED SIGNATURE FALLBACK (e.g., your system_matrix)
     # If it isn't flat, we automatically adapt it to (structured_sources, medium, boundary_data)
     Dim = typeof(sim.medium).parameters[1]
     return (xb, chi) -> begin
@@ -335,8 +335,8 @@ end
 # Overload for Hyperparameter (Source Position) Optimization
 function optimise_source_positions(
     sim, 
-    system_matrix_function::Function;
-    gradient_system_matrix_function::Union{Function, Nothing} = nothing
+    system_matrix_function;
+    gradient_system_matrix_function = nothing
 ) 
     g, xb_flat, init_source_positions, Σ_a, Σ_sensor, Σ_x = _extract_bayesian_components(sim)
     
@@ -362,8 +362,8 @@ end
 function compute_coefficient_posterior(
     sim, 
     chi::AbstractVector, 
-    system_matrix_function::Function;
-    gradient_system_matrix_function::Union{Function, Nothing} = nothing
+    system_matrix_function;
+    gradient_system_matrix_function = nothing
 ) 
     g, xb_flat, _, Σ_a, Σ_sensor, Σ_x = _extract_bayesian_components(sim)
     
