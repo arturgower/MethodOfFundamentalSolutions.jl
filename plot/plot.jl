@@ -78,7 +78,7 @@
     end
 end
 
-@recipe function plot(sim::Simulation; source_positions = true)
+@recipe function plot(sim::Simulation; source_positions = true, boundary_points = true)
     # Set default attributes
     legend --> false
 
@@ -101,7 +101,9 @@ end
     end
 
     # Plot boundary data
-    @series sim.boundary_data
+    if boundary_points
+        @series sim.boundary_data
+    end
 end
 
 @recipe function plot(fsol::FundamentalSolution)
