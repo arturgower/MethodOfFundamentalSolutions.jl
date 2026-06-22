@@ -46,14 +46,18 @@ Bayesian solver for MFS.
 - `prior::P`: The prior distribution for the solution
 The solution is the posterior distribution over the coefficients given the boundary data and the prior. 
 """
-struct BayesianSolver{P<:ProbabilityDistribution} <: AbstractSolver
+struct BayesianSolver{P<:ContinuousMultivariateDistribution} <: AbstractSolver
     prior::P
     optimise_source_positions_flag::Bool 
     use_greens_gradient_analytical_flag::Bool  
 end
 
-function BayesianSolver(prior::P; optimise_source_positions_flag::Bool = false, use_greens_gradient_analytical_flag::Bool = false) where {P<:ProbabilityDistribution}
-    return BayesianSolver{P}(prior, optimise_source_positions_flag, use_greens_gradient_analytical_flag)
+function BayesianSolver(
+    prior::ContinuousMultivariateDistribution; 
+    optimise_source_positions_flag::Bool = false, 
+    use_greens_gradient_analytical_flag::Bool = false
+)
+    return BayesianSolver{typeof(prior)}(prior, optimise_source_positions_flag, use_greens_gradient_analytical_flag)
 end
 
 struct Simulation{S <: AbstractSolver, Dim, P<:PhysicalMedium{Dim}, PS <:ParticularSolution, BD <: BoundaryData}
@@ -87,7 +91,9 @@ function system_matrix(
     bd::BoundaryData
 ) where {Dim, P<:PhysicalMedium{Dim}}
 
-    points = bd.boundary_points
+    points = bd.boundary_points isa AbstractMvNormal ? 
+          struct_points(bd.boundary_points, Dim) : 
+          bd.boundary_points
     normals = bd.outward_normals
 
     # The comprehension block automatically handles the return type
@@ -117,7 +123,10 @@ function system_matrix_gradient(
     bd::BoundaryData
 ) where {Dim, P<:PhysicalMedium{Dim}}
 
-    points = bd.boundary_points
+    points = bd.boundary_points isa AbstractMvNormal ? 
+          struct_points(bd.boundary_points, Dim) : 
+          bd.boundary_points
+          
     normals = bd.outward_normals
     
     n_sensors = length(points)
@@ -201,7 +210,7 @@ function solve(sim::Simulation{TikhonovSolver{T}}) where T
 end
 
 function solve(
-    sim::Simulation{<:BayesianSolver{<:GaussianDistribution}, Dim}
+    sim::Simulation{<:BayesianSolver{<:AbstractMvNormal}, Dim}
     ) where {Dim}
     
     # 1. Determine Source Positions (chi)
@@ -226,9 +235,7 @@ function solve(
             sim, best_source_positions, system_matrix; gradient_system_matrix_function = nothing
         )
     end
-    μ_post, Σ_post = compute_coefficient_posterior(
-        sim, best_source_positions, system_matrix; gradient_system_matrix_function = system_matrix_gradient
-    )
+    
     new_source_positions = [
     SVector{Dim, Float64}(best_source_positions[i : i + Dim - 1]) 
     for i in 1:Dim:length(best_source_positions)

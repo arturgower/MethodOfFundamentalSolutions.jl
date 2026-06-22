@@ -1,53 +1,4 @@
 # Bayesian Inference Routines for MFS Inverse Problems.
-# Defining prior type 
-abstract type ProbabilityDistribution end
-
-struct GaussianDistribution{Dim, FieldDim} <: ProbabilityDistribution
-    mean::Vector{SVector{Dim,Float64}}
-    covariance::Union{AbstractMatrix{Float64}, UniformScaling{Float64}}
-end
-
-function GaussianDistribution(
-    mean::Vector{<:AbstractVector{<:Real}},
-    covariance::Union{AbstractMatrix{Float64}, UniformScaling{Float64}}
-)
-    Dim = length(first(mean))
-
-    mean_svec = [SVector{Dim}(v) for v in mean]
-
-    GaussianDistribution{Dim, length(mean)}(mean_svec, covariance)
-end
-
-function Distributions.MvNormal(dist::GaussianDistribution)
-    # 1. Flatten the mean: MvNormal requires a 1D Vector, not a Vector of SVectors
-    flat_mean = vcat(dist.mean...)
-    
-    # 2. Wrap the covariance in a PDMat to satisfy Distributions.jl
-    # This handles both dense matrices and UniformScaling (diagonal/isotropic)
-    pd_cov = isa(dist.covariance, UniformScaling) ? 
-             PDMat(dist.covariance.λ * I(length(flat_mean))) : 
-             PDMat(dist.covariance)
-             
-    return MvNormal(flat_mean, pd_cov)
-end
-
-function GaussianDistribution(mv_dist::MvNormal, Dim::Int)
-    # 1. Extract the flat mean vector from the MvNormal distribution
-    flat_mean = mean(mv_dist)
-    
-    # 2. Unflatten the mean back into a Vector of SVectors
-    # We use `reinterpret` to chunk the flat array by `Dim` (e.g., pairs for 2D),
-    # and `collect` to ensure it returns a standard Vector instead of a ReinterpretArray.
-    T = eltype(flat_mean)
-    structured_mean = collect(reinterpret(SVector{Dim, T}, flat_mean))
-    
-    # 3. Extract the raw covariance matrix
-    # The `cov()` function safely unwraps the PDMat back into a standard Matrix
-    cov_mat = cov(mv_dist)
-    
-    # 4. Construct your custom struct
-    return GaussianDistribution(structured_mean, cov_mat)
-end
 
 #Helper function to compute the matrix (Cx).
 #Shared across optimization and posterior routines.
@@ -328,17 +279,17 @@ function _extract_bayesian_components(sim)
     bd = sim.boundary_data
     prior = sim.solver.prior
     
-    # Extract Covariances
-    Σ_a = prior.covariance
-    Σ_sensor = bd.fields_covariance
-    Σ_x = bd.boundary_points_covariance
+    # Extract Covariances using the helper functions
+    Σ_a = cov(prior)
+    Σ_sensor = cov_fields(bd.fields)
+    Σ_x = cov_points(bd.boundary_points)
     
-    # Extract Vectors
-    xb_flat = vcat(bd.boundary_points...)
+    # Extract Flat Vectors using the helper functions
+    xb_flat = flat_points(bd.boundary_points)
     source_positions = vcat(sim.source_positions...)
     
     # Calculate effective measurement vector 'g'
-    g = vcat(bd.fields...)
+    g = flat_fields(bd.fields)
     g_particular = field(sim.medium, bd, sim.particular_solution)
     g = g - vcat(g_particular...)
     

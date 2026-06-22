@@ -8,7 +8,7 @@ using MultipleScattering
 using SpecialFunctions: hankelh1,besselj
 using Distributions
 using Optim
-using PDMats
+
 
 import MultipleScattering: PhysicalMedium, ScalarMedium, spatial_dimension, field_dimension, Shape, Box, bounding_box, points_in_shape, cartesian_to_radial_coordinates, radial_to_cartesian_transform, cartesian_to_radial_transform, field
 export cartesian_to_radial_coordinates, radial_to_cartesian_transform, cartesian_to_radial_transform
@@ -20,7 +20,7 @@ using RecipesBase
 
 
 export BoundaryData  # types
-export outward_normals, points_in_shape
+export compute_outward_normals, points_in_shape
 include("boundarydata.jl")
 
 export interior_points_along_coordinate, flat_to_pos_matrix

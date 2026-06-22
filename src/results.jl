@@ -82,10 +82,14 @@ function field(field_type::F, fsol::FundamentalSolution, x::AbstractVector, outw
     return f + fp
 end
 
-function field(medium::P, bd::BoundaryData, psol::PS) where {P <: PhysicalMedium, PS <: ParticularSolution}
+function field(medium::P, bd::BoundaryData{F, Dim}, psol::PS) where {P <: PhysicalMedium, PS <: ParticularSolution, F, Dim}
     
-    return map(eachindex(bd.boundary_points)) do i
-        field(bd.fieldtype, medium, psol, bd.boundary_points[i], bd.outward_normals[i])
+    pts = bd.boundary_points isa AbstractMvNormal ? 
+          struct_points(bd.boundary_points, Dim) : # assuming Dim(bd) or a way to get Dim exists, or use actual_Dim if stored in the type
+          bd.boundary_points
+    
+    return map(eachindex(pts)) do i
+        field(bd.fieldtype, medium, psol, pts[i], bd.outward_normals[i])
     end
 end
 

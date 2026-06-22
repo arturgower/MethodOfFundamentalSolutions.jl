@@ -12,7 +12,7 @@
         outward_ns = [[cos(θ), sin(θ)] for θ in θs]
         interior_points = [[0.0, 0.0]]
 
-        outward_ns2 = outward_normals(points, interior_points)
+        outward_ns2 = compute_outward_normals(points, interior_points)
         errors = [norm(outward_ns[i] - outward_ns2[i]) for i in eachindex(outward_ns)]
 
     @test maximum(errors) < 1e-10
@@ -23,7 +23,7 @@
         outward_ns = [[cos(θ), sin(θ)] for θ in θs]
         interior_points = [[0.0, 0.0]]
         
-        outward_ns2 = outward_normals(points, interior_points)
+        outward_ns2 = compute_outward_normals(points, interior_points)
         errors = [norm(outward_ns[i] - outward_ns2[i]) for i in eachindex(outward_ns)]
 
     @test maximum(errors) < 0.1
