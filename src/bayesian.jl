@@ -58,22 +58,37 @@ function compute_Cx(
     chi::AbstractVector, 
     Sigma_a::AbstractMatrix, 
     Sigma_x_input::AbstractMatrix, 
-    M_func::F
+    M_func::F;
+    h::Real = 1e-5 # Step size for finite differences
 ) where {F}
 
     M_nom = M_func(xb_flat, chi)
     N, K = size(M_nom) # N: total measurement rows, K: total weight columns
     
-    n_sensors = div(length(xb_flat), 2)
+    n_xb = length(xb_flat)
+    n_sensors = div(n_xb, 2)
     d_m = div(N, n_sensors) # Automatically detects degrees of freedom per sensor (1 or 2)
     
-    # Differentiate the fully assembled matrix M with respect to sensor positions
-    jac_M = ForwardDiff.jacobian(x -> M_func(x, chi), xb_flat)
+    # Compute the Jacobian using Central Finite Differences
+    jac_M = zeros(eltype(chi), N * K, n_xb)
+    for v in 1:n_xb
+        xb_fw = copy(xb_flat)
+        xb_bw = copy(xb_flat)
+        
+        xb_fw[v] += h
+        xb_bw[v] -= h
+        
+        M_fw = M_func(xb_fw, chi)
+        M_bw = M_func(xb_bw, chi)
+        
+        # vec() flattens the N x K matrix column-wise, matching ForwardDiff behavior
+        jac_M[:, v] .= (vec(M_fw) .- vec(M_bw)) ./ (2 * h)
+    end
     
     Cx = zeros(eltype(chi), N, N)
     
     # Check if a full global covariance matrix was passed or just a 2x2 block
-    is_full_sigma = size(Sigma_x_input, 1) == length(xb_flat)
+    is_full_sigma = size(Sigma_x_input, 1) == n_xb
     
     for r in 1:N, s in 1:N
         # Identify which physical sensors own row 'r' and row 's'
@@ -207,7 +222,8 @@ function optimise_hyperparameters(
 ) where {F}
 
     obj(chi) = log_marginal_likelihood(chi, g, xb_flat, Sigma_a, Sigma_sensor, Sigma_x_block, M_func)
-    res = optimize(obj, init_chi, LBFGS(), autodiff=AutoForwardDiff())
+    #res = optimize(obj, init_chi, LBFGS(), autodiff=AutoForwardDiff())
+    res = optimize(obj, init_chi)
     return Optim.minimizer(res)
 end
 
@@ -224,7 +240,8 @@ function optimise_hyperparameters(
 
     obj(chi) = log_marginal_likelihood(chi, g, xb_flat, Sigma_a, Sigma_sensor, Sigma_x_block, M_func, grad_M_func)
     # Optimization can still use forward-mode AD on the hyperparameter scalar 'chi' itself!
-    res = optimize(obj, Vector(init_chi), LBFGS(), autodiff=AutoForwardDiff())
+    #res = optimize(obj, Vector(init_chi), LBFGS(), autodiff=AutoForwardDiff())
+    res = optimize(obj, Vector(init_chi))
     return Optim.minimizer(res)
 end
 
