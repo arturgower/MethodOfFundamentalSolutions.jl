@@ -312,7 +312,8 @@ function _build_physics_closure(func, sim, xb_flat, chi_template)
     # If it isn't flat, we automatically adapt it to (structured_sources, medium, boundary_data)
     Dim = typeof(sim.medium).parameters[1]
     return (xb, chi) -> begin
-        structured_sources = reinterpret(SVector{Dim, eltype(chi)}, chi)
+        standard_chi = Vector(chi)
+        structured_sources = collect(reinterpret(SVector{Dim, eltype(standard_chi)}, standard_chi))
         return func(structured_sources, sim.medium, sim.boundary_data)
     end
 end
