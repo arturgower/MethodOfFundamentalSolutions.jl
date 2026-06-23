@@ -174,7 +174,7 @@ function optimise_hyperparameters(
 
     obj(chi) = log_marginal_likelihood(chi, g, xb_flat, Sigma_a, Sigma_sensor, Sigma_x_block, M_func)
     #res = optimize(obj, init_chi, LBFGS(), autodiff=AutoForwardDiff())
-    res = optimize(obj, init_chi)
+    res = optimize(obj, Vector(init_chi), LBFGS())
     return Optim.minimizer(res)
 end
 
@@ -192,7 +192,7 @@ function optimise_hyperparameters(
     obj(chi) = log_marginal_likelihood(chi, g, xb_flat, Sigma_a, Sigma_sensor, Sigma_x_block, M_func, grad_M_func)
     # Optimization can still use forward-mode AD on the hyperparameter scalar 'chi' itself!
     #res = optimize(obj, Vector(init_chi), LBFGS(), autodiff=AutoForwardDiff())
-    res = optimize(obj, Vector(init_chi))
+    res = optimize(obj, Vector(init_chi), LBFGS())
     return Optim.minimizer(res)
 end
 
