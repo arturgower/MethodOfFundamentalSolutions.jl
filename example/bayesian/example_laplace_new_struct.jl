@@ -85,13 +85,11 @@ init_source_positions = [[2.0*cos(θ), 2.0*sin(θ)] for θ in θ_sources]
 # Define the physical medium (Assuming standard acoustic/laplace dummy medium)
 medium = LaplaceMedium{2, Float64}()
 
-bayesian_solver = BayesianSolver(prior; optimise_source_positions_flag=true, use_greens_gradient_analytical_flag=true)
-
 # Package into Simulation
 sim = Simulation(
     medium, 
     bd; 
-    solver = bayesian_solver,
+    solver =solver,
     source_positions = init_source_positions,
     particular_solution = NoParticularSolution(),
     ω = 2pi * 1.0
