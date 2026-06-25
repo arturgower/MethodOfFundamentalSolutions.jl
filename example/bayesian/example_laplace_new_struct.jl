@@ -20,10 +20,10 @@ x0_sensors_true = [[cos(θ), sin(θ)] for θ in θs]
 Σ_x_block = σ_x^2 * I(2)
 Σ_x = kron(I(n_sensors), Σ_x_block)
 
-# Add noise to true positions to generate our experimental realization
+# Add noise to sensor positions to generate our experimental realization
 noise_x_distribution = MvNormal(zeros(2 * n_sensors), Σ_x)
 noise_x_flat = rand(noise_x_distribution)
-noise_x_structured = [noise_x_flat[i:i+1] for i in 1:2:length(noise_x_flat)] 
+noise_x_structured = [noise_x_flat[i:i+1] for i in 1:2:length(noise_x_flat)]
 x0_sensors_noisy = x0_sensors_true .+ noise_x_structured
 
 # Create the spatial distribution representing our knowledge of sensor positions
@@ -47,7 +47,7 @@ g_noisy = rand(measurement_generator)
 # Create the field distribution representing our observed data + uncertainty
 field_distribution = MvNormal(g_noisy, Σ_sensor)
 
-# --- Instantiation using your ultra-flexible distribution syntax! ---
+# Create boundary data from the sensor distribution and field distribution
 bd = BoundaryData(
     DirichletType();
     boundary_points = sensor_distribution,  # Literal AbstractMvNormal passed here
