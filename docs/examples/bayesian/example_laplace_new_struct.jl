@@ -100,7 +100,7 @@ sol = solve(sim)
 # 5. Field Prediction 
 # ==============================================================================
 # Get points inside the unit disk for field prediction
-#using MultipleScattering
+using MultipleScattering
 grid, idx = points_in_shape(Circle([0.0, 0.0], 1.0))
 points = grid[idx]
 
