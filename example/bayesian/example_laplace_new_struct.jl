@@ -100,7 +100,7 @@ sol = solve(sim)
 # 5. Field Prediction 
 # ==============================================================================
 # Get points inside the unit disk for field prediction
-using MultipleScattering
+#using MultipleScattering
 grid, idx = points_in_shape(Circle([0.0, 0.0], 1.0))
 points = grid[idx]
 
@@ -115,7 +115,7 @@ field_predict = FieldResult(grid, [field_mat[i] for i in eachindex(field_mat)]);
 
 
 p1 = plot(field_predict, field_apply = first, title = "Predicted Field")
-plot!(sol)
+plot(sol)
 covs= [
     field_covariance(DirichletType(), sol, x, x / norm(x)) 
 for x in points]
@@ -135,7 +135,7 @@ p2 = plot(std_predict, field_apply = first, title = "Standard Deviation", colorm
 
 plot(p1, p2, layout = (1, 2), size = (800, 400))
 
-plot(sol)
+plot!(sol)
 
 
 # ==============================================================================

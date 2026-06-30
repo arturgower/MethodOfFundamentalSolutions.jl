@@ -43,7 +43,7 @@ cov_fields(fields::AbstractVector)         = 0.0 * I
 # If it's a literal Distributions.MvNormal:
 function struct_fields(fields::AbstractMvNormal, Dim)
     m = mean(fields)
-    return collect(reinterpret(SVector{Dim, eltype(m)}, m))
+    return Vector(reinterpret(SVector{Dim, eltype(m)}, m))
 end
 flat_fields(fields::AbstractMvNormal) = mean(fields)
 cov_fields(fields::AbstractMvNormal)  = cov(fields)
@@ -56,7 +56,7 @@ cov_points(points::AbstractVector)         = 0.0 * I
 
 function struct_points(points::AbstractMvNormal, Dim)
     m = mean(points)
-    return collect(reinterpret(SVector{Dim, eltype(m)}, m))
+    return Vector(reinterpret(SVector{Dim, eltype(m)}, m))
 end
 flat_points(points::AbstractMvNormal) = mean(points)
 cov_points(points::AbstractMvNormal)  = cov(points)

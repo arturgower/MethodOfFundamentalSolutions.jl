@@ -55,7 +55,7 @@ end
 function BayesianSolver(
     prior::ContinuousMultivariateDistribution; 
     optimise_source_positions_flag::Bool = false, 
-    use_greens_gradient_analytical_flag::Bool = false
+    use_greens_gradient_analytical_flag::Bool = true
 )
     return BayesianSolver{typeof(prior)}(prior, optimise_source_positions_flag, use_greens_gradient_analytical_flag)
 end
@@ -117,6 +117,7 @@ function system_matrix(
     return Matrix(mortar(Ms))
 end
 
+
 function system_matrix_gradient(
     source_positions::AbstractVector{<:SVector{Dim}}, 
     medium::P, 
@@ -172,6 +173,8 @@ function system_matrix_gradient(
     return grad_M
 end
 
+system_matrix_gradient(sim::Simulation) = system_matrix_gradient(sim.source_positions, sim.medium, sim.boundary_data)
+
 function solve(medium::P, bd::BoundaryData; kwargs... ) where P <: PhysicalMedium
     sim = Simulation(medium, bd; kwargs...)
     return solve(sim)
@@ -216,25 +219,15 @@ function solve(
     # 1. Determine Source Positions (chi)
     if sim.solver.optimise_source_positions_flag
         println("Optimizing source positions...")
-        best_source_positions = optimise_source_positions(
-            sim, system_matrix; gradient_system_matrix_function = system_matrix_gradient
-        )
+        best_source_positions = optimise_source_positions(sim)
     else
         best_source_positions = vcat(sim.source_positions...)
     end
 
     # 2. Compute Posterior Coefficients
-    if sim.solver.use_greens_gradient_analytical_flag
-        println("Using analytical gradient of the system matrix for posterior computation...")
-        μ_post, Σ_post = compute_coefficient_posterior(
-            sim, best_source_positions, system_matrix; gradient_system_matrix_function = system_matrix_gradient
+    μ_post, Σ_post = compute_coefficient_posterior(
+            sim, best_source_positions
         )
-    else
-        println("Using finite difference approximation of the system matrix gradient for posterior computation...")
-        μ_post, Σ_post = compute_coefficient_posterior(
-            sim, best_source_positions, system_matrix; gradient_system_matrix_function = nothing
-        )
-    end
     
     new_source_positions = [
     SVector{Dim, Float64}(best_source_positions[i : i + Dim - 1]) 

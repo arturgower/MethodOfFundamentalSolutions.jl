@@ -4,278 +4,7 @@
 #Shared across optimization and posterior routines.
 #Works seamlessly for both scalar and matrix-valued Green's functions.
 
-function compute_Cx(
-    xb_flat::AbstractVector, 
-    chi::AbstractVector, 
-    Sigma_a::AbstractMatrix, 
-    Sigma_x_input::AbstractMatrix, 
-    M_func::F;
-    h::Real = 1e-5 # Step size for finite differences
-) where {F}
-
-    M_nom = M_func(xb_flat, chi)
-    N, K = size(M_nom) # N: total measurement rows, K: total weight columns
-    
-    n_xb = length(xb_flat)
-    n_sensors = div(n_xb, 2)
-    d_m = div(N, n_sensors) # Automatically detects degrees of freedom per sensor (1 or 2)
-    
-    # Compute the Jacobian using Central Finite Differences
-    jac_M = zeros(eltype(chi), N * K, n_xb)
-    for v in 1:n_xb
-        xb_fw = copy(xb_flat)
-        xb_bw = copy(xb_flat)
-        
-        xb_fw[v] += h
-        xb_bw[v] -= h
-        
-        M_fw = M_func(xb_fw, chi)
-        M_bw = M_func(xb_bw, chi)
-        
-        # vec() flattens the N x K matrix column-wise, matching ForwardDiff behavior
-        jac_M[:, v] .= (vec(M_fw) .- vec(M_bw)) ./ (2 * h)
-    end
-    
-    Cx = zeros(eltype(chi), N, N)
-    
-    # Check if a full global covariance matrix was passed or just a 2x2 block
-    is_full_sigma = size(Sigma_x_input, 1) == n_xb
-    
-    for r in 1:N, s in 1:N
-        # Identify which physical sensors own row 'r' and row 's'
-        i = div(r - 1, d_m) + 1
-        j = div(s - 1, d_m) + 1
-        
-        # If sensors jitter independently, cross-sensor terms (i != j) are zero.
-        if i == j 
-            # Dynamically pull the correct 2x2 block if the full matrix was provided
-            Sigma_x_block = if is_full_sigma
-                idx_range = (2i-1):(2i)
-                Sigma_x_input[idx_range, idx_range]
-            else
-                Sigma_x_input # Already a 2x2 block
-            end
-
-            J_r = zeros(eltype(chi), K, 2)
-            J_s = zeros(eltype(chi), K, 2)
-            
-            for c in 1:K
-                idx_r = r + (c - 1) * N
-                idx_s = s + (c - 1) * N
-                
-                # Extract derivatives relative to the 2D coordinates of the owning sensor
-                J_r[c, 1] = jac_M[idx_r, 2i - 1]; J_r[c, 2] = jac_M[idx_r, 2i]
-                J_s[c, 1] = jac_M[idx_s, 2j - 1]; J_s[c, 2] = jac_M[idx_s, 2j]
-            end
-            
-            # Account for cross-channel coupling (e.g., how x-jitter affects y-measurement)
-            Cx[r, s] = tr(Sigma_a * J_r * Sigma_x_block * J_s')
-        end
-    end
-    return Cx
-end
-
-
-function compute_Cx_analytical(
-    xb_flat::AbstractVector, 
-    chi::AbstractVector, 
-    Sigma_a::AbstractMatrix, 
-    Sigma_x_input::AbstractMatrix, 
-    grad_M_func::F
-) where {F}
-
-    # grad_M_func returns a 3D tensor of shape (N_measurements, K_weights, 2)
-    grad_M = grad_M_func(xb_flat, chi)
-    N, K, _ = size(grad_M)
-    
-    n_sensors = div(length(xb_flat), 2)
-    d_m = div(N, n_sensors) # Automatically detects measurement channels per sensor (1 or 2)
-    
-    Cx = zeros(eltype(chi), N, N)
-    
-    # Check if a full global covariance matrix was passed or just a 2x2 block
-    is_full_sigma = size(Sigma_x_input, 1) == length(xb_flat)
-    
-    for r in 1:N, s in 1:N
-        # Identify which physical sensors own row 'r' and row 's'
-        i = div(r - 1, d_m) + 1
-        j = div(s - 1, d_m) + 1
-        
-        # If sensors jitter independently, cross-sensor terms are zero
-        if i == j 
-            # Dynamically pull the correct 2x2 block if the full matrix was provided
-            Sigma_x_block = if is_full_sigma
-                idx_range = (2i-1):(2i)
-                Sigma_x_input[idx_range, idx_range]
-            else
-                Sigma_x_input
-            end
-
-            # Extract the (K x 2) spatial derivative matrices directly
-            J_r = grad_M[r, :, :] 
-            J_s = grad_M[s, :, :]
-            
-            # Project 2D spatial error into measurement covariance
-            Cx[r, s] = tr(Sigma_a * J_r * Sigma_x_block * J_s')
-        end
-    end
-    return Cx
-end
-
-
-#Objective function: Compute the negative log-marginal likelihood.
-
-function log_marginal_likelihood(
-    chi::AbstractVector, 
-    g::AbstractVector, 
-    xb_flat::AbstractVector, 
-    Sigma_a::AbstractMatrix, 
-    Sigma_sensor::AbstractMatrix, 
-    Sigma_x_block::AbstractMatrix, 
-    M_func::F
-) where {F}
-
-    M_nom = M_func(xb_flat, chi)
-    Cx = compute_Cx(xb_flat, chi, Sigma_a, Sigma_x_block, M_func)
-    
-    Sigma_gg = Sigma_sensor + Cx + M_nom * Sigma_a * M_nom'
-    return 0.5 * (g' * (Sigma_gg \ g) + logdet(Sigma_gg) + length(g) * log(2π))
-end
-
-function log_marginal_likelihood(
-    chi::AbstractVector, 
-    g::AbstractVector, 
-    xb_flat::AbstractVector, 
-    Sigma_a::AbstractMatrix, 
-    Sigma_sensor::AbstractMatrix, 
-    Sigma_x_block::AbstractMatrix, 
-    M_func::F, 
-    grad_M_func::G
-) where {F, G}
-
-    M_nom = M_func(xb_flat, chi)
-    Cx = compute_Cx_analytical(xb_flat, chi, Sigma_a, Sigma_x_block, grad_M_func)
-    
-    Sigma_gg = Sigma_sensor + Cx + M_nom * Sigma_a * M_nom'
-    return 0.5 * (g' * (Sigma_gg \ g) + logdet(Sigma_gg) + length(g) * log(2π))
-end
-#Step 1: Hyperparameter Optimization.
-#Finds the best parameter vector chi (e.g., basis properties).
-
-function optimise_hyperparameters(
-    g::AbstractVector, 
-    xb_flat::AbstractVector, 
-    Sigma_a::AbstractMatrix, 
-    Sigma_sensor::AbstractMatrix, 
-    Sigma_x_block::AbstractMatrix, 
-    init_chi::AbstractVector, 
-    M_func::F
-) where {F}
-
-    obj(chi) = log_marginal_likelihood(chi, g, xb_flat, Sigma_a, Sigma_sensor, Sigma_x_block, M_func)
-    #res = optimize(obj, init_chi, LBFGS(), autodiff=AutoForwardDiff())
-    res = optimize(obj, Vector(init_chi), LBFGS())
-    return Optim.minimizer(res)
-end
-
-function optimise_hyperparameters(
-    g::AbstractVector, 
-    xb_flat::AbstractVector, 
-    Sigma_a::AbstractMatrix, 
-    Sigma_sensor::AbstractMatrix, 
-    Sigma_x_block::AbstractMatrix, 
-    init_chi::AbstractVector, 
-    M_func::F, 
-    grad_M_func::G
-) where {F, G}
-
-    obj(chi) = log_marginal_likelihood(chi, g, xb_flat, Sigma_a, Sigma_sensor, Sigma_x_block, M_func, grad_M_func)
-    # Optimization can still use forward-mode AD on the hyperparameter scalar 'chi' itself!
-    #res = optimize(obj, Vector(init_chi), LBFGS(), autodiff=AutoForwardDiff())
-    res = optimize(obj, Vector(init_chi), LBFGS())
-    return Optim.minimizer(res)
-end
-
-# Step 2: Calculate Posterior Coefficient Distribution.
-# Computes the mean and covariance for the weights 'a'.
-
-function compute_coefficient_posterior(
-    g::AbstractVector, 
-    xb_flat::AbstractVector, 
-    chi::AbstractVector, 
-    Sigma_a::AbstractMatrix, 
-    Sigma_sensor::AbstractMatrix, 
-    Sigma_x_block::AbstractMatrix, 
-    M_func::F
-) where {F}
-
-    M_nom = M_func(xb_flat, chi)
-    Cx = compute_Cx(xb_flat, chi, Sigma_a, Sigma_x_block, M_func)
-    
-    # Total effective noise matrix
-    R_eff = Sigma_sensor + Cx
-    R_inv = inv(R_eff)
-    
-    # Linear Gaussian update rules for coefficients
-    Sigma_post = inv(M_nom' * R_inv * M_nom + inv(Sigma_a))
-    mu_post = Sigma_post * (M_nom' * R_inv * g)
-    
-    return mu_post, Sigma_post
-end
-
-function compute_coefficient_posterior(
-    g::AbstractVector, 
-    xb_flat::AbstractVector, 
-    chi::AbstractVector, 
-    Sigma_a::AbstractMatrix, 
-    Sigma_sensor::AbstractMatrix, 
-    Sigma_x_block::AbstractMatrix, 
-    M_func::F, 
-    grad_M_func::G
-) where {F, G}
-
-    M_nom = M_func(xb_flat, chi)
-    Cx = compute_Cx_analytical(xb_flat, chi, Sigma_a, Sigma_x_block, grad_M_func)
-    
-    R_eff = Sigma_sensor + Cx
-    R_inv = inv(R_eff)
-    
-    Sigma_post = inv(M_nom' * R_inv * M_nom + inv(Sigma_a))
-    mu_post = Sigma_post * (M_nom' * R_inv * g)
-    
-    return mu_post, Sigma_post
-end
-
-# Step 3: Reconstruct Full Continuous Field.
-# Projects coefficient statistics back across the entire spatial grid domain.
-
-function reconstruct_full_field(
-    x_grid_flat::AbstractVector, 
-    chi::AbstractVector, 
-    mu_post::AbstractVector, 
-    Sigma_post::AbstractMatrix, 
-    phi_func::F; 
-    return_full_cov::Bool=false
-) where {F}
-
-    # Map domain points through your custom function shape template
-    Phi = phi_func(x_grid_flat, chi)
-    
-    # Mean field: μ_u = Φ * μ_post
-    mu_u = Phi * mu_post
-    
-    if return_full_cov
-        # Full covariance: Σ_u = Φ * Σ_post * Φᵀ
-        Sigma_u = Phi * Sigma_post * Phi'
-        return mu_u, Sigma_u
-    else
-        # Row-by-row variance computation for performance/memory savings
-        variance_u = [dot(Phi[i, :], Sigma_post * Phi[i, :]) for i in 1:size(Phi, 1)]
-        return mu_u, variance_u
-    end
-end
-
-function _extract_bayesian_components(sim)
+function extract_bayesian_components(sim)
     bd = sim.boundary_data
     prior = sim.solver.prior
     
@@ -296,83 +25,198 @@ function _extract_bayesian_components(sim)
     return g, xb_flat, source_positions, Σ_a, Σ_sensor, Σ_x
 end
 
-function _build_physics_closure(::Nothing, sim, xb_flat, chi_template)
-  # 1. Handle the case where no gradient function is provided
-    return nothing
-end
 
-function _build_physics_closure(func, sim, xb_flat, chi_template)
-   # 2. FLAT SIGNATURE TEST (e.g., laplace_M)
-    # Does the function accept (medium, flat_sensors, flat_sources)?
-    if applicable(func, sim.medium, xb_flat, chi_template)
-        return (xb, chi) -> func(sim.medium, xb, chi)
-    end
-    
-   # 3. STRUCTURED SIGNATURE FALLBACK (e.g., your system_matrix)
-    # If it isn't flat, we automatically adapt it to (structured_sources, medium, boundary_data)
-    Dim = typeof(sim.medium).parameters[1]
-    return (xb, chi) -> begin
-        standard_chi = Vector(chi)
-        structured_sources = collect(reinterpret(SVector{Dim, eltype(standard_chi)}, standard_chi))
-        return func(structured_sources, sim.medium, sim.boundary_data)
-    end
-end
-
-
-# Overload for Hyperparameter (Source Position) Optimization
-function optimise_source_positions(
+function geometric_covariance(
     sim, 
-    system_matrix_function;
-    gradient_system_matrix_function = nothing
-) 
-    g, xb_flat, init_source_positions, Σ_a, Σ_sensor, Σ_x = _extract_bayesian_components(sim)
+    structured_chi::Vector{SVector{2, T}};
+    h::Real = 1e-5
+) where T
+    # Clean extraction of baseline variables
+    _, xb_flat, _, Sigma_a, _, Sigma_x_input = extract_bayesian_components(sim)
     
-    # Automatically build the correct closures based on the function passed!
-    physics_matrix = _build_physics_closure(
-        system_matrix_function, sim, xb_flat, init_source_positions
-    )
-    physics_gradient = _build_physics_closure(
-        gradient_system_matrix_function, sim, xb_flat, init_source_positions
-    )
+    n_xb = length(xb_flat)
+    n_sensors = div(n_xb, 2)
     
-    if isnothing(physics_gradient)
-        return optimise_hyperparameters(
-            g, xb_flat, Σ_a, Σ_sensor, Σ_x, init_source_positions, physics_matrix
-        )
+    if sim.solver.use_greens_gradient_analytical_flag
+        
+        # ---------------------------------
+        #    Analytical Gradient Branch
+        # ---------------------------------
+        #grad_M = grad_M_func(xb_flat, chi)
+        grad_M = system_matrix_gradient(structured_chi, sim.medium, sim.boundary_data)
+        N, K, _ = size(grad_M)
+        d_m = div(N, n_sensors)
+        
+        Cx = zeros(T, N, N)
+        is_full_sigma = size(Sigma_x_input, 1) == n_xb
+        
+        for r in 1:N, s in 1:N
+            i = div(r - 1, d_m) + 1
+            j = div(s - 1, d_m) + 1
+            
+            if i == j 
+                Sigma_x_block = is_full_sigma ? Sigma_x_input[(2i-1):(2i), (2i-1):(2i)] : Sigma_x_input
+                J_r = grad_M[r, :, :] 
+                J_s = grad_M[s, :, :]
+                
+                Cx[r, s] = tr(Sigma_a * J_r * Sigma_x_block * J_s')
+            end
+        end
+        return Cx
+        
     else
-        return optimise_hyperparameters(
-            g, xb_flat, Σ_a, Σ_sensor, Σ_x, init_source_positions, physics_matrix, physics_gradient
-        )
+        
+        # ---------------------------------
+        #    Finite Difference Branch
+        # ---------------------------------
+        #M_nom = M_func(xb_flat, chi)
+        M_nom = system_matrix(structured_chi, sim.medium, sim.boundary_data)
+        N, K = size(M_nom)
+        d_m = div(N, n_sensors)
+        
+        jac_M = zeros(T, N * K, n_xb)
+        # 1. Allocate the structured boundary points ONCE outside the loop.
+        # This gives system_matrix the exact heap-allocated Vector it demands.
+        xb_structured = Vector(reinterpret(SVector{2, eltype(xb_flat)}, xb_flat))
+
+        for v in 1:n_xb
+            # 2. Map the flat index (v) to the SVector index (s_idx) and the coordinate (x=1, y=2)
+            s_idx = div(v - 1, 2) + 1
+            coord = mod1(v, 2)
+    
+            # Save the original SVector
+            orig_svec = xb_structured[s_idx]
+            
+            # --- Forward Step ---
+            # Create a new SVector on the stack (zero heap allocations) and overwrite the slot
+            if coord == 1
+                xb_structured[s_idx] = SVector(orig_svec[1] + h, orig_svec[2])
+            else
+                xb_structured[s_idx] = SVector(orig_svec[1], orig_svec[2] + h)
+            end
+            
+            bd_fw = BoundaryData(sim.boundary_data.fieldtype; boundary_points = xb_structured, fields = sim.boundary_data.fields,outward_normals = sim.boundary_data.outward_normals, interior_points = sim.boundary_data.interior_points)
+            M_fw = system_matrix(structured_chi, sim.medium, bd_fw)
+            
+            # --- Backward Step ---
+            if coord == 1
+                xb_structured[s_idx] = SVector(orig_svec[1] - h, orig_svec[2])
+            else
+                xb_structured[s_idx] = SVector(orig_svec[1], orig_svec[2] - h)
+            end
+            
+            bd_bw = BoundaryData(sim.boundary_data.fieldtype; boundary_points = xb_structured, fields = sim.boundary_data.fields,outward_normals = sim.boundary_data.outward_normals, interior_points = sim.boundary_data.interior_points)
+            M_bw = system_matrix(structured_chi, sim.medium, bd_bw)
+            
+            # --- Reset ---
+            # Put the original SVector back before moving to the next coordinate
+            xb_structured[s_idx] = orig_svec
+            
+            # Apply math safely (using the corrected explicit broadcast)
+            @views jac_M[:, v] .= (vec(M_fw) .- vec(M_bw)) ./ (2 * h)
+        end
+        
+        Cx = zeros(eltype(chi), N, N)
+        is_full_sigma = size(Sigma_x_input, 1) == n_xb
+        
+        for r in 1:N, s in 1:N
+            i = div(r - 1, d_m) + 1
+            j = div(s - 1, d_m) + 1
+            
+            if i == j 
+                Sigma_x_block = is_full_sigma ? Sigma_x_input[(2i-1):(2i), (2i-1):(2i)] : Sigma_x_input
+                J_r = zeros(eltype(chi), K, 2)
+                J_s = zeros(eltype(chi), K, 2)
+                
+                for c in 1:K
+                    idx_r = r + (c - 1) * N
+                    idx_s = s + (c - 1) * N
+                    
+                    J_r[c, 1] = jac_M[idx_r, 2i - 1]; J_r[c, 2] = jac_M[idx_r, 2i]
+                    J_s[c, 1] = jac_M[idx_s, 2j - 1]; J_s[c, 2] = jac_M[idx_s, 2j]
+                end
+                
+                Cx[r, s] = tr(Sigma_a * J_r * Sigma_x_block * J_s')
+            end
+        end
+        return Cx
     end
 end
+#Objective function: Compute the negative log-marginal likelihood.
+
+function log_marginal_likelihood(chi::AbstractVector, sim)
+    g, _, _, Sigma_a, Sigma_sensor, _ = extract_bayesian_components(sim)
+
+    structured_chi=Vector(reinterpret(SVector{2, eltype(chi)}, chi))
+
+    M_nom = system_matrix(structured_chi, sim.medium, sim.boundary_data)
+    Cx = geometric_covariance(sim, structured_chi)
+    
+    Sigma_gg = Sigma_sensor + Cx + M_nom * Sigma_a * M_nom'
+    return 0.5 * (g' * (Sigma_gg \ g) + logdet(Sigma_gg) + length(g) * log(2π))
+end
+
+function log_marginal_likelihood(chi::AbstractVector, diagSigma_a:: AbstractVector, sim)
+    g, _, _, _, Sigma_sensor, _ = extract_bayesian_components(sim)
+
+    Sigma_a=Diagonal(diagSigma_a)
+
+    structured_chi=Vector(reinterpret(SVector{2, eltype(chi)}, chi))
+
+    M_nom = system_matrix(structured_chi, sim.medium, sim.boundary_data)
+    Cx = geometric_covariance(sim, structured_chi)
+    
+    Sigma_gg = Sigma_sensor + Cx + M_nom * Sigma_a * M_nom'
+    return 0.5 * (g' * (Sigma_gg \ g) + logdet(Sigma_gg) + length(g) * log(2π))
+end
+
+function optimise_source_positions(sim, init_chi::AbstractVector)
+    obj(chi) = log_marginal_likelihood(chi, sim)
+    res = optimize(obj, Vector(init_chi), LBFGS())
+    return Optim.minimizer(res)
+end
+
+function optimise_source_positions(sim)
+    optimise_source_positions(sim, vcat(sim.source_positions...))
+end
+
+function compute_coefficient_posterior(sim, chi::AbstractVector)
+    g, _, _, Sigma_a, Sigma_sensor, _ = extract_bayesian_components(sim)
+
+    structured_chi=Vector(reinterpret(SVector{2, eltype(chi)}, Vector(chi)))
+
+    M_nom = system_matrix(structured_chi, sim.medium, sim.boundary_data)
+    
+    Cx = geometric_covariance(sim, structured_chi)
+    
+    R_eff = Sigma_sensor + Cx
+    R_inv = inv(R_eff)
+    
+    Sigma_post = inv(M_nom' * R_inv * M_nom + inv(Sigma_a))
+    mu_post = Sigma_post * (M_nom' * R_inv * g)
+    
+    return mu_post, Sigma_post
+end
+
+
 
 function construct_prior(
     sim
 )
     # 1. Extract all current components from the simulation
-    g, xb_flat, init_chi, Σ_a_init, Σ_sensor, Σ_x = _extract_bayesian_components(sim)
+    g, xb_flat, init_chi, Σ_a_init, Σ_sensor, Σ_x = extract_bayesian_components(sim)
     
-    # 2. Build the physics closures
-    physics_matrix = _build_physics_closure(
-        system_matrix, sim, xb_flat, init_chi
-    )
-    
-    if sim.solver.use_greens_gradient_analytical_flag
-        physics_gradient = _build_physics_closure(system_matrix_gradient, sim, xb_flat, init_chi)
-    else
-        physics_gradient = nothing
-    end
-    
-    # 3. Extract initial diagonal variances from the MvNormal prior
+
+    # 2. Extract initial diagonal variances from the MvNormal prior
     # We add a tiny nugget (1e-12) to prevent log(0) if the initial variance is strictly zero
     init_variances = diag(Σ_a_init)
     init_omega = log.(init_variances .+ 1e-12) 
     
-    # 4. Concatenate into a single master parameter vector
+    # 3. Concatenate into a single master parameter vector
     theta_init = [init_chi; init_omega]
     n_chi = length(init_chi)
     
-    # 5. Define the joint objective function
+    # 4. Define the joint objective function
     function joint_obj(theta)
         # Unpack the master vector
         chi_current = theta[1:n_chi]
@@ -382,15 +226,9 @@ function construct_prior(
         Sigma_a_current = Diagonal(exp.(omega_current))
         
         # Call the appropriate typed log_marginal_likelihood
-        if isnothing(physics_gradient)
-            return log_marginal_likelihood(
-                chi_current, g, xb_flat, Sigma_a_current, Σ_sensor, Σ_x, physics_matrix
-            )
-        else
-            return log_marginal_likelihood(
-                chi_current, g, xb_flat, Sigma_a_current, Σ_sensor, Σ_x, physics_matrix, physics_gradient
-            )
-        end
+        
+        return log_marginal_likelihood(chi_current, omega_current, sim)
+        
     end
     
     # 6. Run the joint optimization
@@ -432,30 +270,5 @@ function construct_prior(
 end
 
 
-function compute_coefficient_posterior(
-    sim, 
-    chi::AbstractVector, 
-    system_matrix_function;
-    gradient_system_matrix_function = nothing
-) 
-    g, xb_flat, _, Σ_a, Σ_sensor, Σ_x = _extract_bayesian_components(sim)
-    
-    # Automatically build the correct closures
-    physics_matrix = _build_physics_closure(
-        system_matrix_function, sim, xb_flat, chi
-    )
-    physics_gradient = _build_physics_closure(
-        gradient_system_matrix_function, sim, xb_flat, chi
-    )
-    
-    if isnothing(physics_gradient)
-        return compute_coefficient_posterior(
-            g, xb_flat, chi, Σ_a, Σ_sensor, Σ_x, physics_matrix
-        )
-    else
-        return compute_coefficient_posterior(
-            g, xb_flat, chi, Σ_a, Σ_sensor, Σ_x, physics_matrix, physics_gradient
-        )
-    end
-end
+
 
