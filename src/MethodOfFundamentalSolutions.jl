@@ -26,7 +26,7 @@ include("boundarydata.jl")
 export interior_points_along_coordinate, flat_to_pos_matrix
 include("utils.jl")
 
-export log_marginal_likelihood, optimise_hyperparameters, compute_coefficient_posterior, reconstruct_full_field, compute_Cx, compute_Cx_analytical, construct_prior # Bayesian functions
+export log_marginal_likelihood, optimise_hyperparameters, compute_coefficient_posterior, reconstruct_full_field, construct_prior, geometric_covariance # Bayesian functions
 export ProbabilityDistribution, GaussianDistribution, BayesianSolver # Prior types
 include("bayesian.jl")
 

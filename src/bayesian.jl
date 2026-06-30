@@ -116,7 +116,7 @@ function geometric_covariance(
             @views jac_M[:, v] .= (vec(M_fw) .- vec(M_bw)) ./ (2 * h)
         end
         
-        Cx = zeros(eltype(chi), N, N)
+        Cx = zeros(T, N, N)
         is_full_sigma = size(Sigma_x_input, 1) == n_xb
         
         for r in 1:N, s in 1:N
@@ -125,8 +125,8 @@ function geometric_covariance(
             
             if i == j 
                 Sigma_x_block = is_full_sigma ? Sigma_x_input[(2i-1):(2i), (2i-1):(2i)] : Sigma_x_input
-                J_r = zeros(eltype(chi), K, 2)
-                J_s = zeros(eltype(chi), K, 2)
+                J_r = zeros(T, K, 2)
+                J_s = zeros(T, K, 2)
                 
                 for c in 1:K
                     idx_r = r + (c - 1) * N
