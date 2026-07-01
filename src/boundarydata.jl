@@ -26,28 +26,80 @@ Fields
 Notes
 - It is expected that `length(points) == length(fields)` and that entries are aligned by index.
 """
-struct BoundaryData{F <: FieldType, Dim, FieldDim} <: Shape{Dim}
+struct BoundaryData{F <: FieldType, Dim, S, FS} <: Shape{Dim}
     fieldtype::F
-    boundary_points::Vector{SVector{Dim,Float64}}
-    fields::Vector{SVector{FieldDim,Union{Float64, ComplexF64}}}
+    boundary_points::S  # Can be Vector{SVector} OR AbstractMvNormal
+    fields::FS           # Can be Vector{SVector} OR AbstractMvNormal
     outward_normals::Vector{SVector{Dim,Float64}}
     interior_points::Vector{SVector{Dim,Float64}}
 end
 
+# --- Accessors for FIELDS (FS) ---
+# If it's already a Vector of SVectors:
+struct_fields(fields::AbstractVector, Dim) = fields
+flat_fields(fields::AbstractVector)        = vcat(fields...)
+cov_fields(fields::AbstractVector)         = 0.0 * I
+
+# If it's a literal Distributions.MvNormal:
+function struct_fields(fields::AbstractMvNormal, Dim)
+    m = mean(fields)
+    return Vector(reinterpret(SVector{Dim, eltype(m)}, m))
+end
+flat_fields(fields::AbstractMvNormal) = mean(fields)
+cov_fields(fields::AbstractMvNormal)  = cov(fields)
+
+
+# --- Accessors for BOUNDARY POINTS (S) ---
+struct_points(points::AbstractVector, Dim) = points
+flat_points(points::AbstractVector)        = vcat(points...)
+cov_points(points::AbstractVector)         = 0.0 * I
+
+function struct_points(points::AbstractMvNormal, Dim)
+    m = mean(points)
+    return Vector(reinterpret(SVector{Dim, eltype(m)}, m))
+end
+flat_points(points::AbstractMvNormal) = mean(points)
+cov_points(points::AbstractMvNormal)  = cov(points)
+
 function BoundaryData(field_type::F; 
-        boundary_points::Vector = [zeros(Float64,2)], 
-        fields::Vector{FV} = [p .* 0.0 for p in boundary_points],
-        interior_points::Vector = [mean(boundary_points)],
-        outward_normals::Vector = outward_normals(boundary_points,interior_points),
-    ) where {F <: FieldType, FV <: AbstractVector}
+        boundary_points = [zeros(Float64, 2)], 
+        fields = nothing,
+        interior_points = nothing,
+        outward_normals = nothing,
+        Dim = 2 
+    ) where {F <: FieldType}
 
-    Dim = length(boundary_points[1])
-    FieldDim = length(fields[1])
+    # 1. Resolve spatial dimension safely
+    # If boundary_points is NOT a distribution, auto-deduce it to respect the user's input type
+    actual_Dim = (boundary_points isa AbstractMvNormal) ? Dim : length(first(boundary_points))
 
-    # All outward normals should have unit length
-    outward_normals = [n / norm(n) for n in outward_normals]
+    # 2. Re-structure points and find count N
+    pts_structured = struct_points(boundary_points, actual_Dim)
+    N = length(pts_structured)
 
-    BoundaryData{F,Dim,FieldDim}(field_type, boundary_points, fields, outward_normals, interior_points)
+    # 3. Handle default fields fallback
+    resolved_fields = isnothing(fields) ? [pts_structured[1] .* 0.0] : fields
+
+    # 4. Safely resolve field dimension (FieldDim)
+    if resolved_fields isa AbstractMvNormal
+        total_field_length = length(mean(resolved_fields))
+        actual_FieldDim = total_field_length ÷ N
+    else
+        actual_FieldDim = length(first(resolved_fields))
+    end
+
+    # 5. Geometrical fallbacks
+    actual_interior = isnothing(interior_points) ? [mean(pts_structured)] : interior_points
+    
+    actual_normals = isnothing(outward_normals) ? 
+                     compute_outward_normals(pts_structured, actual_interior) : 
+                     outward_normals
+
+    actual_normals = [n / norm(n) for n in actual_normals]
+
+    return BoundaryData{F, actual_Dim, typeof(boundary_points), typeof(resolved_fields)}(
+        field_type, boundary_points, resolved_fields, actual_normals, actual_interior
+    )
 end
 
 import MultipleScattering: name
@@ -100,7 +152,7 @@ function issubset(box::Box, cloud::BoundaryData)
     return all(c ∈ cloud for c in corners(box))
 end
 
-function outward_normals(boundary_points, interior_points; 
+function compute_outward_normals(boundary_points, interior_points; 
         number_of_neighbours = min(2 * length(boundary_points[1]), max(1, length(boundary_points)-1))
     )
     

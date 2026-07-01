@@ -13,6 +13,7 @@ struct FundamentalSolution{Dim,P<:PhysicalMedium{Dim}, PS <:ParticularSolution, 
     particular_solution::PS
     positions::Vector{SVector{Dim,T}}
     coefficients::Vector{C}
+    coefficients_covariance::Union{AbstractMatrix{Float64}, UniformScaling{Float64}}
     relative_boundary_error::T
 end
 
@@ -20,6 +21,7 @@ function FundamentalSolution(medium::P;
         particular_solution::PS = NoParticularSolution(),
         positions::Vector{<:AbstractVector} = [zeros(Float64,spatial_dimension(medium))],
         coefficients::AbstractVector = [one(Float64)],
+        coefficients_covariance::Union{AbstractMatrix{Float64}, UniformScaling{Float64}} = 0.0*I,
         relative_boundary_error = zero(Float64)
     ) where {P<:PhysicalMedium, PS <: ParticularSolution}
     
@@ -45,7 +47,7 @@ function FundamentalSolution(medium::P;
     pos_converted = convert(Vector{SVector{Dim,T}}, positions)
     coef_converted = convert(Vector{C}, coefficients)
 
-    return FundamentalSolution{Dim,P,PS,T,C}(medium, particular_solution, pos_converted, coef_converted, relative_boundary_error)
+    return FundamentalSolution{Dim,P,PS,T,C}(medium, particular_solution, pos_converted, coef_converted, coefficients_covariance, relative_boundary_error)
 end
 
 
@@ -80,11 +82,51 @@ function field(field_type::F, fsol::FundamentalSolution, x::AbstractVector, outw
     return f + fp
 end
 
-function field(medium::P, bd::BoundaryData, psol::PS) where {P <: PhysicalMedium, PS <: ParticularSolution}
+function field(medium::P, bd::BoundaryData{F, Dim}, psol::PS) where {P <: PhysicalMedium, PS <: ParticularSolution, F, Dim}
     
-    return map(eachindex(bd.boundary_points)) do i
-        field(bd.fieldtype, medium, psol, bd.boundary_points[i], bd.outward_normals[i])
+    pts = bd.boundary_points isa AbstractMvNormal ? 
+          struct_points(bd.boundary_points, Dim) : # assuming Dim(bd) or a way to get Dim exists, or use actual_Dim if stored in the type
+          bd.boundary_points
+    
+    return map(eachindex(pts)) do i
+        field(bd.fieldtype, medium, psol, pts[i], bd.outward_normals[i])
     end
+end
+
+function field_covariance(field_type::F, fsol::FundamentalSolution, x::AbstractVector, outward_normal::AbstractVector = ones(x |> length)) where F <: FieldType
+ 
+    outward_normal = SVector(outward_normal...) ./ norm(outward_normal)
+    x = SVector(x...)
+
+    Gs = [
+        greens(field_type, fsol.medium, x - p, outward_normal) 
+    for p in fsol.positions]
+
+    Phi = hcat(Gs...)
+    
+    # Extract the covariance of the solved coefficients
+    Sigma_post = fsol.coefficients_covariance
+    
+    cov = Phi * Sigma_post * Phi'
+    
+    return cov
+end
+
+function field_std(
+        field_type::F, 
+        fsol::FundamentalSolution, 
+        x::AbstractVector, 
+        outward_normal::AbstractVector = ones(x |> length)
+    ) where F <: FieldType
+    
+    # 1. Get the full covariance matrix at point x
+    cov = field_covariance(field_type, fsol, x, outward_normal)
+    
+    # 2. Extract the variance (diagonal) and take the square root 
+    # The dot (.) broadcasts the sqrt across all diagonal elements
+    std_dev = sqrt.(diag(cov))
+    
+    return std_dev
 end
 
 """

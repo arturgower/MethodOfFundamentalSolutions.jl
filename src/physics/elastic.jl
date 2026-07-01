@@ -70,6 +70,7 @@ function greens(displace::DisplacementType, medium::Elastostatic{2,T}, x::SVecto
 
     ν = λ / (2λ + 2μ) 
     r2 = dot(x,x)
+    r = sqrt(r2)
 
     U = [
         (3-4ν) * log(r) * (i==j) - x[i] * x[j] / r2
