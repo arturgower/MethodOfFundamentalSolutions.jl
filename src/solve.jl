@@ -189,7 +189,6 @@ function solve(sim::Simulation{TikhonovSolver{T}}) where T
     forcing_particular = field(sim.medium, sim.boundary_data, sim.particular_solution)
     forcing = forcing - vcat(forcing_particular...)
     
-
     # Tikinov solution
     condM = cond(M)
     sqrtλ = if sim.solver.λ < zero(eltype(sim.solver.λ)) 

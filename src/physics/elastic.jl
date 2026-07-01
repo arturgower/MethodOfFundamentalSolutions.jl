@@ -42,8 +42,9 @@ struct StrainType <: FieldType end
 
 struct ParticularGravity{T} <: ParticularSolution 
     g::T
-    function ParticularGravity(; g::T = 9.81) where T
-        new{T}(g)
+    height::T # the height times the average width should equal the volume.
+    function ParticularGravity(; g::T = 9.81, height::T = zero(typeof(g))) where T
+        new{T}(g, height)
     end
 end
 
@@ -56,7 +57,7 @@ function greens(traction::TractionType, medium::Elastostatic{2,T}, x::SVector{2,
     xn = dot(x,n)
 
     Σn = [
-        μ * (xn * (l == i) + x[i]*n[l] - x[l]*n[i]) + 2(λ+μ) * (x[l]*x[i]*xn / r2)
+        μ * (xn * (l == i) + x[i]*n[l] - x[l]*n[i]) + 2(λ+μ) * (x[l]*x[i] * xn / r2)
     for i = 1:2, l = 1:2]
     Σn = Σn ./ (2pi*(λ+2μ)*r2)
 
@@ -92,13 +93,13 @@ function greens(strain::StrainType, medium::Elastostatic{2,T}, x::SVector{2,T}, 
          (3-4ν)*( xs*(l==i) + x[i]*s[l] )- 2*x[l]*s[i]  - s[l]*x[i] - xs*(l==i) + 4*xs*x[i]*x[l]/r2
     for i = 1:2, l = 1:2]
     
-    Es=Es./(16pi*μ*(1-ν)*r2)
+    Es = Es ./ (16pi*μ*(1-ν)*r2)
     
     return Es
 
 end
 
 function field(traction::TractionType, medium::Elastostatic{Dim,T}, psol::ParticularGravity, x::AbstractVector, outward_normal::AbstractVector) where {T,Dim}
-    σzz = medium.ρ*psol.g*x[Dim]
+    σzz = medium.ρ*psol.g*(x[Dim] - psol.height)
     return SVector(zero(T), σzz * outward_normal[Dim])
 end
