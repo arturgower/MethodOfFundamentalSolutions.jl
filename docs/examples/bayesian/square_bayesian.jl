@@ -93,7 +93,7 @@ bd = BoundaryData(TractionType();
 
 solver_bayesian = BayesianSolver(
     prior_distribution;
-    optimise_source_positions_flag = false, 
+    optimise_source_positions_flag = true, 
     use_greens_gradient_analytical_flag = true
 )
 
@@ -102,6 +102,7 @@ solver_bayesian = BayesianSolver(
 # ==============================================================================
 sim = Simulation(medium, bd; 
     particular_solution = ParticularGravity(height = H),
+    #particular_solution = NoParticularSolution(),
     solver = solver_bayesian,
     source_positions = source_positions
 )
@@ -125,13 +126,13 @@ fs = [
     
 # Extract the first component (u_x displacement) for visualization
 field_mat = [[0.0] for x in grid]
-field_mat[idx] = [[fs[i][1]] for i in eachindex(fs)]
+field_mat[idx] = [[fs[i][2]] for i in eachindex(fs)]
 
 field_predict = FieldResult(grid, [field_mat[i] for i in eachindex(field_mat)])
 
 using Plots
 # Plot predicted field
-p1 = plot(field_predict, field_apply = first, title = "Predicted Field (u_x)")
+p1 = plot(field_predict, field_apply = first, title = "Predicted Field (σyy)",colormap = :inferno)
 plot!(fsol)
 
 # Calculate Bayesian field uncertainty configurations
@@ -147,13 +148,13 @@ stds = [
 
 # Extract the standard deviation for the u_x component
 std_mat = [[0.0] for x in grid]
-std_mat[idx] = [[stds[i][1]] for i in eachindex(stds)]
+std_mat[idx] = [[stds[i][2]] for i in eachindex(stds)]
 
 std_predict = FieldResult(grid, [std_mat[i] for i in eachindex(std_mat)])
 
 # Plot standard deviation field
-p2 = plot(std_predict, field_apply = first, title = "Standard Deviation (u_x)", colormap = :inferno)
+p2 = plot(std_predict, field_apply = first, title = "Standard Deviation (σyy)", colormap = :inferno)
 
 # Render side-by-side plots with source layout overlay
 plot(p1, p2, layout = (1, 2), size = (800, 400))
-plot!(fsol)
+plot(fsol)
