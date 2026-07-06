@@ -137,22 +137,23 @@ function system_matrix_gradient(
     T_sources = eltype(eltype(source_positions))
     NumType = promote_type(T_points, T_sources)
 
-    # --- THE MAGIC: DYNAMIC ADAPTATION ---
-    # 1. Run a single test evaluation to see what the physics kernel outputs
+    # 1. Run test evaluation
     r_vec_test = points[1] - source_positions[1]
     normal_test = SVector{Dim, NumType}(normals[1])
     G_sample = greens_gradient(bd.fieldtype, medium, r_vec_test, normal_test)
     
-    # 2. Extract its exact data type and shape 
-    # Laplace will report shape `(2,)`. Elasticity might report `(2, 2)`.
-    OutType = eltype(G_sample)
     out_shape = size(G_sample)
 
-    # 3. Preallocate an N-dimensional array using the exact shape reported!
-    # For Laplace, this builds an Array{OutType, 3} of size (N, M, 2).
-    # For Elasticity, it builds an Array{OutType, 4} of size (N, M, 2, 2).
-    grad_M = Array{OutType}(undef, n_sensors, n_sources, out_shape...)
+    # 2. Dynamically determine Degrees of Freedom (DOF) based on kernel shape
+    d_m_out = length(out_shape) == 1 ? 1 : out_shape[1]
+    d_m_in  = length(out_shape) == 1 ? 1 : out_shape[2]
+    
+    N = n_sensors * d_m_out
+    K = n_sources * d_m_in
 
+    # 3. Preallocate the flattened (N, K, Dim) array using the statically known NumType
+    grad_M = zeros(NumType, N, K, Dim)
+    
     # --- MATRIX ASSEMBLY ---
     for j in 1:n_sources
         x = source_positions[j]
@@ -160,12 +161,21 @@ function system_matrix_gradient(
             r_vec = points[i] - x
             normal_vec = SVector{Dim, NumType}(normals[i])
             
-            # Evaluate the physics
             G_grad = greens_gradient(bd.fieldtype, medium, r_vec, normal_vec)
             
-            # CartesianIndices automatically iterates over whatever shape G_grad is!
-            for K in CartesianIndices(G_grad)
-                grad_M[i, j, K] = G_grad[K]
+            # 4. Map local tensor to global flat indices
+            if length(out_shape) == 1
+                # Scalar physics (Laplace)
+                for k in 1:Dim
+                    grad_M[i, j, k] = G_grad[k]
+                end
+            else
+                # Matrix/Tensor physics (Elasticity)
+                for i_ch in 1:d_m_out, j_ch in 1:d_m_in, k in 1:Dim
+                    row = d_m_out * (i - 1) + i_ch
+                    col = d_m_in  * (j - 1) + j_ch
+                    grad_M[row, col, k] = G_grad[i_ch, j_ch, k]
+                end
             end
         end
     end

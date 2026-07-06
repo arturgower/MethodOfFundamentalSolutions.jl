@@ -23,7 +23,7 @@ export BoundaryData  # types
 export compute_outward_normals, points_in_shape
 include("boundarydata.jl")
 
-export interior_points_along_coordinate, flat_to_pos_matrix
+export interior_points_along_coordinate
 include("utils.jl")
 
 export log_marginal_likelihood, optimise_hyperparameters, compute_coefficient_posterior, reconstruct_full_field, construct_prior, geometric_covariance # Bayesian functions

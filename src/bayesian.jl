@@ -48,20 +48,19 @@ function geometric_covariance(
         d_m = div(N, n_sensors)
         
         Cx = zeros(T, N, N)
-        is_full_sigma = size(Sigma_x_input, 1) == n_xb
-        
-        for r in 1:N, s in 1:N
-            i = div(r - 1, d_m) + 1
-            j = div(s - 1, d_m) + 1
-            
-            if i == j 
-                Sigma_x_block = is_full_sigma ? Sigma_x_input[(2i-1):(2i), (2i-1):(2i)] : Sigma_x_input
-                J_r = grad_M[r, :, :] 
-                J_s = grad_M[s, :, :]
+        is_full_sigma = !(Sigma_x_input isa UniformScaling) && (size(Sigma_x_input, 1) == n_xb)        
+            for r in 1:N, s in 1:N
+                i = div(r - 1, d_m) + 1
+                j = div(s - 1, d_m) + 1
                 
-                Cx[r, s] = tr(Sigma_a * J_r * Sigma_x_block * J_s')
+                if i == j 
+                    Sigma_x_block = is_full_sigma ? Sigma_x_input[(2i-1):(2i), (2i-1):(2i)] : Sigma_x_input
+                    J_r = grad_M[r, :, :] 
+                    J_s = grad_M[s, :, :]
+                    
+                    Cx[r, s] = tr(Sigma_a * J_r * Sigma_x_block * J_s')
+                end
             end
-        end
         return Cx
         
     else
