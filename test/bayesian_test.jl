@@ -95,7 +95,7 @@
     Cx_fd = geometric_covariance(sim_fd, structured_chi; h = h_test)
 
     # Check 1: The two methods must match closely (Tolerance tuned for FD at h=1e-5)
-    @test isapprox(Cx_analytical, Cx_fd, rtol=1e-4)
+    @test isapprox(Cx_analytical, Cx_fd, rtol=1e-10)
 end
 
 @testset "geometric_covariance_consistency_test_elastostatic" begin
@@ -197,7 +197,7 @@ end
     Cx_fd = geometric_covariance(sim_fd, structured_chi; h = h_test)
 
     # The matrices must match closely at h=1e-5
-    @test isapprox(Cx_analytical, Cx_fd, rtol=1e-4)
+    @test isapprox(Cx_analytical, Cx_fd, rtol=1e-10)
 end
 # ==============================================================================
 # TEST SET 2: Finite-Difference Convergence Rate
