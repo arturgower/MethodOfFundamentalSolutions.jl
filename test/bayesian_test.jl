@@ -393,3 +393,175 @@ end
         @test isapprox(rate, expected_order, atol=0.15)
     end
 end
+
+# ==============================================================================
+# TEST SET 3: Field Prediction Validation (Analytical vs Bayesian)
+# ==============================================================================
+
+
+
+@testset "Full Grid Bayesian Validation Square Gravity without position optimisation" begin
+    # ==============================================================================
+    # 1. Medium and Physical Domain Setup (Interleaved Layout)
+    # ==============================================================================
+    medium = Elastostatic(2; ρ = 1.0, cp = 3.0, cs = 2.0)
+
+    n = 20; L = 0.5; H = 0.5
+    x = [
+        LinRange(-L, L, n+2)[2:end-1]; 
+        zeros(n) .+ L; 
+        LinRange(L, -L, n+2)[2:end-1]; 
+        zeros(n) .- L
+    ]
+    y = [
+        zeros(n);
+        LinRange(0, H, n+2)[2:end-1];
+        zeros(n) .+ H;
+        LinRange(H, 0, n+2)[2:end-1]
+    ]
+    points = [[x[i], y[i]] for i in eachindex(x)]
+
+    # Create normals (optional for traction type here, but kept for completeness)
+    normals = [
+        [ [0.0, -1.0] for i = 1:n]; 
+        [ [1.0,  0.0] for i = 1:n]; 
+        [ [0.0,  1.0] for i = 1:n]; 
+        [ [-1.0, 0.0] for i = 1:n]
+    ]
+
+    weight = 2L * H * medium.ρ * 9.81
+    traction_deterministic = [
+        [ [0.0, weight / (2L)] for i = 1:n]; 
+        [ [0.0, 0.0]           for i = 1:n]; 
+        [ [0.0, 0.0]           for i = 1:n]; 
+        [ [0.0, 0.0]           for i = 1:n]
+    ]
+
+    # Flatten using Interleaved Layout: [x1, y1, x2, y2, ...]
+    flat_points = vcat(points...)
+    flat_traction = vcat(vcat(traction_deterministic...)...)
+
+    # ==============================================================================
+    # 2. Bayesian Bounding Box: Large Source Square
+    # ==============================================================================
+    ns_per_side = 20
+    source_positions = Vector{Float64}[]
+
+    # Bottom Side
+    for x_val in LinRange(-2.0, 2.0, ns_per_side+1)[1:end-1]
+        push!(source_positions, [x_val, -1.75])
+    end
+    # Right Side
+    for y_val in LinRange(-1.75, 2.25, ns_per_side+1)[1:end-1]
+        push!(source_positions, [2.0, y_val])
+    end
+    # Top Side
+    for x_val in LinRange(2.0, -2.0, ns_per_side+1)[1:end-1]
+        push!(source_positions, [x_val, 2.25])
+    end
+    # Left Side
+    for y_val in LinRange(2.25, -1.75, ns_per_side+1)[1:end-1]
+        push!(source_positions, [-2.0, y_val])
+    end
+
+    n_sources = length(source_positions)
+
+    # ==============================================================================
+    # 3. Statistical Distributions & Solver Configuration
+    # ==============================================================================
+    # Define measurement uncertainty for the traction data
+    σ_traction = 0.01 * maximum(abs.(flat_traction))
+    Σ_traction = (σ_traction^2) * I(length(flat_traction))
+    field_distribution = MvNormal(flat_traction, Σ_traction)
+
+    # Define coordinate uncertainty for the boundary points
+    σ_points = 0.01
+    Σ_points = (σ_points^2) * I(length(flat_points))
+    points_distribution = MvNormal(flat_points, Σ_points)
+
+    # Define the prior distribution for the source charges
+    σ_prior = 100.0
+    Σ_prior = (σ_prior^2) * I(2 * n_sources)
+    prior_distribution = MvNormal(zeros(2 * n_sources), Σ_prior)
+
+    # Package into Bayesian Configurations
+    bd = BoundaryData(TractionType(); 
+        boundary_points = points_distribution, 
+        fields = field_distribution
+    )
+
+    solver_bayesian = BayesianSolver(
+        prior_distribution;
+        optimise_source_positions_flag = false, 
+        use_greens_gradient_analytical_flag = true
+    )
+
+    # ==============================================================================
+    # 4. Simulation and Execution
+    # ==============================================================================
+    sim = Simulation(medium, bd; 
+        particular_solution = ParticularGravity(height = H),
+        solver = solver_bayesian,
+        source_positions = source_positions
+    )
+
+    fsol = solve(sim)
+
+    # ==============================================================================
+    # 5. Field Prediction and Plotting
+    # ==============================================================================
+    # Set up a deterministic BoundaryData just to fetch the internal grid safely
+    bd_plot = BoundaryData(TractionType(); 
+        boundary_points = points, 
+        fields = field_distribution 
+    )
+
+    grid, idx = points_in_shape(bd_plot)
+    interior_points = grid[idx]
+    normal_up = [0.0, 1.0]
+
+    # Evaluate mean field and standard deviation
+    fs = [field(TractionType(), fsol, p, normal_up) for p in interior_points]
+    stds = [field_std(TractionType(), fsol, p, normal_up) for p in interior_points]
+        
+    # Extract the σ_yy component (index 2) and pad with NaN for clean plotting
+    field_mat = [[NaN] for x in grid]
+    field_mat[idx] = [[fs[i][2]] for i in eachindex(fs)]
+
+    std_mat = [[NaN] for x in grid]
+    std_mat[idx] = [[stds[i][2]] for i in eachindex(stds)]
+
+    field_predict = FieldResult(grid, [field_mat[i] for i in eachindex(field_mat)])
+    std_predict = FieldResult(grid, [std_mat[i] for i in eachindex(std_mat)])
+
+    total_tested = length(interior_points)
+    passed_tests = 0
+    # ==============================================================================
+    # 6. Bayesian Validation Test
+    # ==============================================================================
+    println("\n=== Running Full Grid Statistical Test ===")
+    
+    for (i, p) in enumerate(interior_points)
+        y_coord = p[2]
+        
+        # Analytical vertical stress profile for a block under gravity
+        analytical_σ_yy = medium.ρ * 9.81 * (y_coord - H)
+        
+        # Predicted stress and standard deviation from earlier calculations
+        predicted_σ_yy = fs[i][2]
+        predicted_std_σ_yy = stds[i][2]
+        
+        # 3-Sigma validation check
+        abs_error = abs(predicted_σ_yy - analytical_σ_yy)
+        three_sigma_bound = 3 * predicted_std_σ_yy
+        
+        @test abs_error <= three_sigma_bound
+        
+        if abs_error <= three_sigma_bound
+            passed_tests += 1
+        end
+    end
+    
+    println("Test completed for the entire interior grid!")
+    println("Successfully validated: $passed_tests / $total_tested interior points.")
+end
