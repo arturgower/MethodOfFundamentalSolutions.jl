@@ -75,7 +75,7 @@ n_sources = length(source_positions)
 # ==============================================================================
 # Define measurement uncertainty for the traction data
 
-σ_traction = 0.01*maximum(abs.(flat_traction))  # 10% of the maximum traction magnitude
+σ_traction = 0.01*maximum(abs.(flat_traction))  # 1% of the maximum traction magnitude
 Σ_traction = (σ_traction^2) * I(length(flat_traction))
 field_distribution = MvNormal(flat_traction, Σ_traction)
 
@@ -169,6 +169,7 @@ std_predict = FieldResult(grid, [std_mat[i] for i in eachindex(std_mat)])
 p2 = plot(std_predict, field_apply = first, title = "Standard Deviation (σyy)", colormap = :inferno)
 
 # Render side-by-side plots with source layout overlay
+plot(fsol)
 plot(p1, p2, layout = (1, 2), size = (800, 400))
 plot(fsol, xlims = (-10.0, 10.0), ylims = (-0.5, 0.5), title = "Source Layout Overlay")
 

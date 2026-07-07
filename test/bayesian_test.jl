@@ -564,4 +564,45 @@ end
     
     println("Test completed for the entire interior grid!")
     println("Successfully validated: $passed_tests / $total_tested interior points.")
+
+    # ==============================================================================
+    # 7. Boundary Residual Check (Self-Consistency)
+    # ==============================================================================
+
+    total_boundary_points = length(points)
+    total_components = 2 * total_boundary_points # Checking both X and Y directions
+    passed_boundary_tests = 0
+    max_traction_error = 0.0
+    
+    println("\n=== Running Boundary Residual Check ===")
+    
+    for i in 1:total_boundary_points
+        p = points[i]
+        n_vec = normals[i]
+        applied_traction = traction_deterministic[i]
+        
+        # Predict the traction vector [Tx, Ty] and its standard deviation at the boundary
+        predicted_traction = field(TractionType(), fsol, p, n_vec)
+        predicted_std = field_std(TractionType(), fsol, p, n_vec)
+        
+        # Check both X and Y components of the traction vector
+        for dim in 1:2
+            abs_error = abs(predicted_traction[dim] - applied_traction[dim])
+            three_sigma_bound = 3 * predicted_std[dim]
+            
+            # Track the maximum error just to see how well it fits overall
+            max_traction_error = max(max_traction_error, abs_error)
+            
+            @test abs_error <= three_sigma_bound
+            
+            if abs_error <= three_sigma_bound
+                passed_boundary_tests += 1
+            end
+        end
+    end
+    
+    println("Maximum boundary traction residual error: $max_traction_error")
+    println("Successfully validated boundary components: $passed_boundary_tests / $total_components")
+
+
 end
