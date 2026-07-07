@@ -49,15 +49,21 @@ The solution is the posterior distribution over the coefficients given the bound
 struct BayesianSolver{P<:ContinuousMultivariateDistribution} <: AbstractSolver
     prior::P
     optimise_source_positions_flag::Bool 
-    use_greens_gradient_analytical_flag::Bool  
+    use_greens_gradient_analytical_flag::Bool
+    gradient_tol::Float64
+    objective_function_tol::Float64
+    max_iters::Int  
 end
 
 function BayesianSolver(
     prior::ContinuousMultivariateDistribution; 
     optimise_source_positions_flag::Bool = false, 
-    use_greens_gradient_analytical_flag::Bool = true
+    use_greens_gradient_analytical_flag::Bool = true,
+    gradient_tol::Float64 = 1e-3,
+    objective_function_tol::Float64 = 1e-4,
+    max_iters::Int = 50
 )
-    return BayesianSolver{typeof(prior)}(prior, optimise_source_positions_flag, use_greens_gradient_analytical_flag)
+    return BayesianSolver{typeof(prior)}(prior, optimise_source_positions_flag, use_greens_gradient_analytical_flag, gradient_tol, objective_function_tol, max_iters)
 end
 
 struct Simulation{S <: AbstractSolver, Dim, P<:PhysicalMedium{Dim}, PS <:ParticularSolution, BD <: BoundaryData}

@@ -40,6 +40,7 @@ traction_deterministic = [
 
 # Flatten the deterministic traction vector for the statistical distribution
 # Length will be: 4 sides * n points/side * 2 components = 8n
+flat_points = vcat(vcat(points...)...)
 flat_traction = vcat(vcat(traction_deterministic...)...)
 
 # ==============================================================================
@@ -74,19 +75,25 @@ n_sources = length(source_positions)
 # ==============================================================================
 # Define measurement uncertainty for the traction data
 
-σ_traction = 0.001*maximum(abs.(flat_traction))  # 10% of the maximum traction magnitude
+σ_traction = 0.01*maximum(abs.(flat_traction))  # 1% of the maximum traction magnitude
 Σ_traction = (σ_traction^2) * I(length(flat_traction))
 field_distribution = MvNormal(flat_traction, Σ_traction)
 
 # Define the prior distribution for the source charges
 # Since it's Elastostatics (2D vector field), length = 2 * n_sources
-σ_prior = 1.0
+σ_prior = 100.0
 Σ_prior = (σ_prior^2) * I(2 * n_sources)
 prior_distribution = MvNormal(zeros(2 * n_sources), Σ_prior)
 
+σ_points=0.01
+Σ_points = (σ_points^2) * I(length(flat_points))
+points_distribution = MvNormal(flat_points, Σ_points)
+points_flat = rand(points_distribution)
+points_distribution = MvNormal(points_flat, Σ_points)
 # Package everything cleanly into the Bayesian configurations
+
 bd = BoundaryData(TractionType(); 
-    boundary_points = points, 
+    boundary_points = points_distribution, 
     fields = field_distribution,  # Statistical distribution passed here
     #outward_normals = normals
 )
@@ -94,7 +101,8 @@ bd = BoundaryData(TractionType();
 solver_bayesian = BayesianSolver(
     prior_distribution;
     optimise_source_positions_flag = true, 
-    use_greens_gradient_analytical_flag = true
+    use_greens_gradient_analytical_flag = true,
+    max_iters = 5,
 )
 
 # ==============================================================================
@@ -112,8 +120,14 @@ fsol = solve(sim)
 # ==============================================================================
 # 5. Field Prediction (Displacement)
 # ==============================================================================
+bd_plot = BoundaryData(TractionType(); 
+    boundary_points = points, 
+    fields = field_distribution,  # Statistical distribution passed here
+    #outward_normals = normals
+)
 
-grid, idx = points_in_shape(bd)
+
+grid, idx = points_in_shape(bd_plot)
 points = grid[idx]
 # Define a dummy normal vector required for vector field evaluations
 normal = [0.0, 1.0]
@@ -125,7 +139,7 @@ fs = [
 ]
     
 # Extract the first component (u_x displacement) for visualization
-field_mat = [[0.0] for x in grid]
+field_mat = [[NaN] for x in grid]
 field_mat[idx] = [[fs[i][2]] for i in eachindex(fs)]
 
 field_predict = FieldResult(grid, [field_mat[i] for i in eachindex(field_mat)])
@@ -147,7 +161,7 @@ stds = [
 ]
 
 # Extract the standard deviation for the u_x component
-std_mat = [[0.0] for x in grid]
+std_mat = [[NaN] for x in grid]
 std_mat[idx] = [[stds[i][2]] for i in eachindex(stds)]
 
 std_predict = FieldResult(grid, [std_mat[i] for i in eachindex(std_mat)])
@@ -156,5 +170,8 @@ std_predict = FieldResult(grid, [std_mat[i] for i in eachindex(std_mat)])
 p2 = plot(std_predict, field_apply = first, title = "Standard Deviation (σyy)", colormap = :inferno)
 
 # Render side-by-side plots with source layout overlay
-plot(p1, p2, layout = (1, 2), size = (800, 400))
 plot(fsol)
+plot(p1, p2, layout = (1, 2), size = (800, 400))
+plot(fsol, xlims = (-1.0, 1.0), ylims = (-0.5, 0.5), title = "Source Layout Overlay")
+
+

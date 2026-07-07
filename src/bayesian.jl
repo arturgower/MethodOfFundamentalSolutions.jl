@@ -171,7 +171,15 @@ end
 
 function optimise_source_positions(sim, init_chi::AbstractVector)
     obj(chi) = log_marginal_likelihood(chi, sim)
-    res = optimize(obj, Vector(init_chi), LBFGS())
+   
+    # Extract the tolerances directly from the simulation's solver struct
+    opts = Optim.Options(
+        g_tol = sim.solver.gradient_tol,
+        f_reltol = sim.solver.objective_function_tol,
+        iterations = sim.solver.max_iters,
+        show_trace = false
+    )
+    res = optimize(obj, Vector(init_chi), LBFGS(),opts)
     return Optim.minimizer(res)
 end
 
@@ -229,10 +237,18 @@ function construct_prior(
         return log_marginal_likelihood(chi_current, omega_current, sim)
         
     end
+
+    # Extract the tolerances directly from the simulation's solver struct
+    opts = Optim.Options(
+        g_tol = sim.solver.gradient_tol,
+        f_reltol = sim.solver.objective_function_tol,
+        iterations = sim.solver.max_iters,
+        show_trace = false
+    )
     
     # 6. Run the joint optimization
     # Note: If you want to use ForwardDiff, change to LBFGS(), autodiff=AutoForwardDiff()
-    res = optimize(joint_obj, Vector(theta_init), LBFGS())
+    res = optimize(joint_obj, Vector(theta_init), LBFGS(), opts)
     theta_opt = Optim.minimizer(res)
     
     # 7. Unpack the optimized results
@@ -252,7 +268,10 @@ function construct_prior(
     opt_solver = BayesianSolver(
         opt_prior; 
         optimise_source_positions_flag = sim.solver.optimise_source_positions_flag,
-        use_greens_gradient_analytical_flag = sim.solver.use_greens_gradient_analytical_flag
+        use_greens_gradient_analytical_flag = sim.solver.use_greens_gradient_analytical_flag,
+        gradient_tol = sim.solver.gradient_tol,
+        objective_function_tol = sim.solver.objective_function_tol,
+        max_iters = sim.solver.max_iters
     )
     
     opt_sim = Simulation(
