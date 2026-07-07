@@ -100,8 +100,9 @@ bd = BoundaryData(TractionType();
 
 solver_bayesian = BayesianSolver(
     prior_distribution;
-    optimise_source_positions_flag = false, 
-    use_greens_gradient_analytical_flag = true
+    optimise_source_positions_flag = true, 
+    use_greens_gradient_analytical_flag = true,
+    max_iters = 5,
 )
 
 # ==============================================================================
@@ -171,6 +172,6 @@ p2 = plot(std_predict, field_apply = first, title = "Standard Deviation (σyy)",
 # Render side-by-side plots with source layout overlay
 plot(fsol)
 plot(p1, p2, layout = (1, 2), size = (800, 400))
-plot(fsol, xlims = (-10.0, 10.0), ylims = (-0.5, 0.5), title = "Source Layout Overlay")
+plot(fsol, xlims = (-1.0, 1.0), ylims = (-0.5, 0.5), title = "Source Layout Overlay")
 
 
