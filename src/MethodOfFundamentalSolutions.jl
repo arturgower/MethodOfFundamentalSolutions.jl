@@ -39,6 +39,9 @@ export FieldResult, FundamentalSolution
 export field, field_covariance, field_std # types
 include("results.jl")
 
+export VariationalBayesianSolver, VariationalSolution, grid_source_positions
+include("variational.jl")
+
 export DisplacementType ,TractionType, Elastostatic, Acoustic, LaplaceMedium, DirichletType, NeumannType, laplace_M, laplace_grad_M # types and functions
 export ParticularGravity # types
 include("physics/elastic.jl")

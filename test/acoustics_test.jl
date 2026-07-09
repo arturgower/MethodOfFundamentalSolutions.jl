@@ -36,7 +36,7 @@ source_pos=source_positions(bd; relative_source_distance = 1.0)
 
 # Solve
 solver = TikhonovSolver(λ=λ, tolerance = tolerance)
-sim=Simulation(medium,bd, solver=solver, source_positions = source_pos)
+sim = Simulation(medium,bd, solver=solver, source_positions = source_pos)
 fsol = solve(sim)
 
 predict_fields = [field(TractionType(), fsol, bd_points[i], normals[i]) for i in eachindex(bd_points)]

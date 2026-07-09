@@ -1,0 +1,699 @@
+\documentclass{article}
+\usepackage{graphicx} % Required for inserting images
+\usepackage{amsmath}% Required for inserting images
+\usepackage{comment}
+\usepackage{subcaption}
+\usepackage{algorithm}
+\usepackage{algpseudocode}
+\input{preamble}
+\input{macros}
+
+\usepackage{authblk}
+
+\title{Meshless methods and uncertainty quantification for inverse problems with applications in condition monitoring of structures}
+
+\date{\vspace{-5ex}}
+
+\author{ Matheus de C.\ Loures, Art L.\ Gower${}^1$}
+% \author[2]{Matheus de C.\ Loures}
+% \author[3]{Art L.\ Gower}
+\affil{Department of Mechanical, Aerospace and Civil Engineering, \\ The University of Sheffield, UK}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+Operator learning methods have emerged as a powerful tool for solving partial differential equations (PDEs) in a meshless manner. To do so, they write the solution as a sum of random basis functions. The method is general, but data hungry. Here we develop a specialisation appropriate for when there is a simple basis of solutions for a linear PDE, a method that has been known as Trefftz method, and specifically the Method of Fundamental Solutions. We develop a statistical learning method that learns and adjusts the basis through evidence maximization. Because the basis satisfies the governing equation exactly, this specialisation requires far fewer degrees of freedom than a generic random basis, and it is particularly well suited to inverse problems. Example applications where a basis is available include acoustics, linear elasticity, electrostatics, and electromagnetics.
+\end{abstract}
+
+\section{Introduction}
+\section{Description of the problem}
+Consider the following boundary value problem defined on a simply connected compact domain $\Omega$ with boundary $\partial \Omega$:
+\begin{equation}
+    \mathbf{\hat{\mkern1mu L}} \vec{u}(\vec{x}) = 0 \quad \text{for } \vec{x} \in \Omega
+\end{equation}
+with boundary conditions
+\begin{equation}
+    \mathbf{\hat{B}} \vec{u}(\vec{x}) = \vec{g}(\vec{x}) \quad \text{for } \vec{x} \in \partial \Omega
+\end{equation}
+where $\mathbf{\hat{ \mkern1mu L}}$ and $\mathbf{\hat{B}}$ are linear differential operators, and $\vec{g}$ is a boundary condition.  A manner of solving this problem is to find a basis of functions $\{\vec{\phi}_i\}$ that satisfy the homogeneous equation $\mathbf{\hat{L}} \vec{\phi}_i = \vec{0}$ and then to find a linear combination of these functions that satisfies the boundary conditions. This is known in the literature as Trefftz method \cite{}. So we have that the solution can be approximated as
+\begin{equation}
+    \vec{u}(\vec{x}) \approx \sum_{i=1}^N a_i \vec{\phi}_i(\vec{x})= \Phi \vec{a}. \quad \text{where } \Phi = [\vec{\phi}_1 \ \vec{\phi}_2 \ \ldots \ \vec{\phi}_N]
+\end{equation}
+We wish to solve this to the case where $\vec{g}(\vec{x})$ is a random function. Since the basis is known, the problem reduces to finding the distribution of the coefficients $\vec{a}$ given the distribution of $\vec{g}$. The main mathematical reason to go through this approach is that in the space of distributions the problem is well posed, while in the space of functions it can not be, especially for the case of inverse problems. After we find the distribution of $\vec{a}$ we can find the distribution of $\vec{u}$ in the whole domain $\Omega$. Since we intend to solve the problem in a probabilistic manner, we can even consider the case where the boundary itself is not known, which means that in this case $\vec{x} \in \partial \Omega$ is also a random variable. This approach might be quite useful for cases where we have data measurements on the boundary and we do not know the exact position of the boundary and we wish to learn it also. So we first will describe the solution for the case where the boundary is known and then we will describe the solution for the case where the boundary is not known.
+% Consider $\vec{g}*$ as the set of measurements of $\vec{g}$ at the points $\{\vec{x}_j\}$, we can writ
+\section{Bayesian solution for a fixed known boundary} \label{sec:fixed_boundary}
+
+\subsection{The linear Gaussian model}
+In this section we present the general probabilistic solution of the problem when the boundary is known exactly, i.e.\ we find the posterior distribution of the coefficients $\vec{a}$. One aspect that can be quite tricky is how to choose the basis functions, because of the broadness of the function space. To keep this choice flexible we let each basis function depend on a set of parameters $\vec{\chi}_i$, writing $\vec{\phi}_i = \vec{\phi}_i(\vec{x}, \vec{\chi}_i)$; for the method of fundamental solutions of Section~\ref{sec:mfs} the $\vec{\chi}_i$ will be the source positions. From the boundary conditions, $\vec{g}$ and $\vec{a}$ are linearly related,
+\begin{equation}
+     \vec{g}(\vec x) \approx \mathbf{M}(\vec{x},\vec{\chi})\vec{a} \quad \text{where } \mathbf{M}(\vec x, \vec \chi)=[\mathbf{\hat{B}} \vec{\phi}_1 (%
+\vec{x}, \vec{\chi}_1) \ \mathbf{\hat{B}}\vec{\phi}_2(\vec{x}, \vec{\chi}_2) \ \ldots \ \mathbf{\hat{B}}\vec{\phi}_N(\vec{x}, \vec{\chi}_N)].
+ \end{equation}
+Two remarks are in order. First, in practice we do not observe the function $\vec{g}$ but its values at a finite set of measurement points $\{\vec{x}_j\}_{j=1}^{N_g} \subset \partial\Omega$; from now on, with a small abuse of notation, $\vec{g}$ denotes the vector of stacked measured values and $\mathbf{M}$ the corresponding matrix whose rows are evaluated at the measurement points, so that all the distributions below are over finite dimensional vectors. Second, the relation above is exact only when the true solution lies in the span of the basis; the truncation error of the finite basis will be absorbed by the noise model that we now introduce. We model the measurement noise, together with this truncation error, as additive Gaussian noise,
+\begin{equation}
+    \vec{g} = \mathbf{M}\vec{a} + \vec{\epsilon}, \qquad \vec{\epsilon} \sim \mathcal{N}(\vec{0}, \mathbf{\Sigma}), \label{eq:model}
+\end{equation}
+where $\mathbf{\Sigma}$ is the noise covariance matrix and $\vec\epsilon$ is independent of $\vec a$. Throughout this paper we treat $\mathbf{\Sigma}$ as \emph{known}: in practice it is set by the specification or calibration of the sensors, typically $\mathbf{\Sigma} = \sigma^2\mathbf I$ with a given noise level $\sigma$. Written as a distribution, the model \eqref{eq:model} states that the probability of observing the data $\vec g$ given the coefficients $\vec a$, called the likelihood, is
+\begin{equation}
+    p(\vec{g}|\vec{a}) = \mathcal{N}(\vec g \,|\, \mathbf{M}\vec a,\, \mathbf{\Sigma}) \propto \exp\left(-\frac{1}{2}(\vec{g} - \mathbf{M}\vec{a})^T \mathbf{\Sigma}^{-1} (\vec{g} - \mathbf{M}\vec{a})\right). \label{eq:likelihood}
+\end{equation}
+To complete the model we must state what we know about the coefficients before seeing any data. We take a Gaussian prior with zero mean and covariance $\mathbf{\Sigma}_a$,
+\begin{equation}
+    p(\vec{a}) = \mathcal{N}(\vec a\,|\,\vec 0,\, \mathbf{\Sigma}_a), \label{eq:prior}
+\end{equation}
+which limits the range of plausible values of $\vec{a}$ and thereby naturally regularizes the solution. Bayes' theorem then combines likelihood and prior into the posterior distribution,
+\begin{equation}
+    p(\vec{a}|\vec{g}) = \frac{p(\vec{g}|\vec{a})\,p(\vec{a})}{p(\vec{g})}, \qquad
+    p(\vec{g}) = \int p(\vec{g}|\vec{a})\,p(\vec{a})\,d\vec{a}, \label{eq:evidence}
+\end{equation}
+where the normalizing constant $p(\vec{g})$, called the evidence or marginal likelihood, is the probability that the model assigns to the observed data after averaging over all coefficient values weighted by the prior. The evidence plays the central role in this paper: it is the quantity we will maximize to learn the basis parameters $\vec\chi$ and the prior $\mathbf{\Sigma}_a$.
+
+\subsection{Posterior and evidence from the joint distribution}
+Both the posterior and the evidence follow from one elementary object: the joint distribution of $(\vec{a}, \vec{g})$. From \eqref{eq:model}, $\vec{g}$ is a linear combination of the jointly Gaussian variables $(\vec{a}, \vec{\epsilon})$, so the pair $(\vec{a}, \vec{g})$ is itself Gaussian and is completely determined by its first two moments. These follow directly from \eqref{eq:model}, the independence of $\vec{a}$ and $\vec{\epsilon}$, and their zero means:
+\begin{align}
+    &E[\vec{a}] = \vec 0, \qquad E[\vec{g}] = \mathbf{M}\,E[\vec{a}] + E[\vec{\epsilon}] = \vec 0,\\
+    &E[\vec{a}\vec{a}^T] = \mathbf{\Sigma}_a, \qquad
+    E[\vec{a}\vec{g}^T] = E[\vec{a}\vec{a}^T]\mathbf{M}^T + E[\vec{a}\vec{\epsilon}^T] = \mathbf{\Sigma}_a\mathbf{M}^T,\\
+    &E[\vec{g}\vec{g}^T] = \mathbf{M}\, E[\vec{a}\vec{a}^T]\,\mathbf{M}^T + E[\vec{\epsilon}\vec{\epsilon}^T] = \mathbf{M}\mathbf{\Sigma}_a\mathbf{M}^T + \mathbf{\Sigma},
+\end{align}
+so that
+\begin{equation}
+    \begin{bmatrix} \vec a\\ \vec g\end{bmatrix} \sim \mathcal N\left(\vec 0,\; \mathbf{\Sigma}_{\text{joint}}\right), \qquad
+    \mathbf{\Sigma}_{\text{joint}} = \begin{bmatrix}
+        \mathbf{\Sigma}_a & \mathbf{\Sigma}_a\mathbf{M}^T\\
+        \mathbf{M}\mathbf{\Sigma}_a & \mathbf{M}\mathbf{\Sigma}_a\mathbf{M}^T + \mathbf{\Sigma}
+    \end{bmatrix}. \label{eq:joint_fixed}
+\end{equation}
+In Appendix~\ref{app:conditioning} we show from first principles, by factorizing the joint density with the Schur complement, that for any zero-mean Gaussian pair with joint covariance blocks $\mathbf{\Sigma}_{aa}, \mathbf{\Sigma}_{ag}, \mathbf{\Sigma}_{ga}, \mathbf{\Sigma}_{gg}$ the marginal of $\vec g$ and the conditional of $\vec a$ given $\vec g$ are again Gaussian, with
+\begin{equation}
+    p(\vec g) = \mathcal N(\vec g\,|\,\vec 0,\, \mathbf{\Sigma}_{gg}), \qquad
+    p(\vec a|\vec g) = \mathcal N\big(\vec a \,\big|\, \mathbf{\Sigma}_{ag}\mathbf{\Sigma}_{gg}^{-1}\vec g,\; \mathbf{\Sigma}_{aa} - \mathbf{\Sigma}_{ag}\mathbf{\Sigma}_{gg}^{-1}\mathbf{\Sigma}_{ga}\big). \label{eq:conditioning}
+\end{equation}
+Reading off the blocks of \eqref{eq:joint_fixed} immediately gives the two distributions we are after. The evidence is
+\begin{equation}
+    p(\vec{g}) = \mathcal N(\vec g \,|\, \vec 0,\, \mathbf{\Sigma}_{\text{evidence}}), \qquad \mathbf{\Sigma}_{\text{evidence}} = \mathbf{M} \mathbf{\Sigma}_a \mathbf{M}^T + \mathbf{\Sigma}, \label{covariannce_evidence_woodbury}
+\end{equation}
+with a transparent interpretation: the data are explained partly by the basis, whose reach is measured by $\mathbf{M}\mathbf{\Sigma}_a\mathbf{M}^T$, and partly by the noise $\mathbf\Sigma$. The posterior is $p(\vec a|\vec g) = \mathcal N(\vec a\,|\,\vec\mu_{\text{post}},\, \mathbf{\Sigma}_{\text{post}})$ with
+\begin{align}
+    &\vec{\mu}_{\text{post}}= \mathbf{\Sigma}_a \mathbf{M}^T\left( \mathbf{M}\mathbf{\Sigma}_a \mathbf{M}^T + \mathbf{\Sigma}\right)^{-1} \vec{g}, \label{eq:posterior_mean_woodbury}\\
+    &\mathbf{\Sigma}_{\text{post}} = \mathbf{\Sigma}_a - \mathbf{\Sigma}_a \mathbf{M}^T (\mathbf{M} \mathbf{\Sigma}_a \mathbf{M}^T + \mathbf{\Sigma})^{-1} \mathbf{M} \mathbf{\Sigma}_a. \label{eq:posterior_covariance_woodbury}
+\end{align}
+These expressions require inverting a matrix of the size $N_g$ of the data. The Woodbury matrix identity, which states that for any invertible matrices $\mathbf{A}$, $\mathbf{C}$ and any matrices $\mathbf{U}$ and $\mathbf{V}$,
+\begin{equation}
+    (\mathbf{A} + \mathbf{U}\mathbf{C}\mathbf{V})^{-1} = \mathbf{A}^{-1} - \mathbf{A}^{-1}\mathbf{U}(\mathbf{C}^{-1} + \mathbf{V}\mathbf{A}^{-1}\mathbf{U})^{-1} \mathbf{V}\mathbf{A}^{-1}, \label{eq:woodbury}
+\end{equation}
+converts them to the equivalent forms
+\begin{align}
+    &\mathbf{\Sigma}_{\text{post}} = (\mathbf{M}^T \mathbf{\Sigma}^{-1} \mathbf{M} + \mathbf{\Sigma}_a^{-1})^{-1}, \label{eq:posterior_covariance}\\
+    &\vec{\mu}_{\text{post}} = (\mathbf{M}^T \mathbf{\Sigma}^{-1} \mathbf{M} + \mathbf{\Sigma}_a^{-1})^{-1}\mathbf{M}^T \mathbf{\Sigma}^{-1}\vec{g}, \label{eq:posterior_mean}
+\end{align}
+which instead invert a matrix of the size $N$ of the basis. The two forms are mathematically identical, so in practice one uses whichever matrix is smaller. For inverse problems there are typically more basis functions than measurements, $N_g < N$, and the forms \eqref{eq:posterior_mean_woodbury}--\eqref{eq:posterior_covariance_woodbury} are cheaper; for forward problems with abundant data, or a very strong prior, the forms \eqref{eq:posterior_covariance}--\eqref{eq:posterior_mean} are cheaper. The form \eqref{eq:posterior_mean} also makes contact with classical methods: $\vec\mu_{\text{post}}$ is exactly the minimizer of the Tikhonov-regularized least squares functional $(\vec g - \mathbf M \vec a)^T\mathbf{\Sigma}^{-1}(\vec g - \mathbf M \vec a) + \vec a^T \mathbf{\Sigma}_a^{-1}\vec a$, so the Bayesian treatment recovers regularized least squares as its posterior mean, while additionally supplying the uncertainty $\mathbf{\Sigma}_{\text{post}}$ and the evidence \eqref{covariannce_evidence_woodbury}.
+
+Finally, since $\vec u = \Phi \vec a$ is linear in $\vec a$, the posterior of the field $\vec{u}$ anywhere in $\Omega$ is also Gaussian, with
+\begin{equation}
+    \vec{\mu}_u = \Phi \vec{\mu}_{\text{post}}, \qquad \mathbf{\Sigma}_u = \Phi \mathbf{\Sigma}_{\text{post}} \Phi^T. \label{eq:field_posterior}
+\end{equation}
+\subsection{Learning the basis by evidence maximization} \label{sec:evidence_maximization}
+We now discuss how to find the optimal hyperparameters $\vec{\chi}$. The principle is empirical Bayes, also called type-II maximum likelihood: choose the hyperparameters that maximize the evidence \eqref{covariannce_evidence_woodbury}, i.e.\ the probability the model assigns to the data actually observed. Writing out the Gaussian evidence with its normalization constant,
+\begin{equation}
+   p(\vec{g}) = \frac{1}{(2\pi)^{N_g/2} |\mathbf{\Sigma}_{\text{evidence}}|^{1/2}} \exp\left(-\frac{1}{2}\vec{g}^T \mathbf{\Sigma}_{\text{evidence}}^{-1} \vec{g}\right),
+\end{equation}
+and taking the logarithm, which is monotonic and easier to work with, the optimum is
+\begin{equation}
+    \vec{\chi}^* = \arg\max_{\vec{\chi}} \log p(\vec{g}) = \arg\max_{\vec{\chi}} \left(-\frac{1}{2}\vec{g}^T \mathbf{\Sigma}_{\text{evidence}}^{-1} \vec{g} - \frac{1}{2}\log |\mathbf{\Sigma}_{\text{evidence}}| - \frac{N_g}{2}\log 2\pi \right). \label{eq:log_evidence}
+\end{equation}
+The two $\vec\chi$-dependent terms compete. The quadratic term is a data-fit term: it favours hyperparameters under which the observed data are probable. The log-determinant is a complexity penalty: it favours models that spread their prior probability over as few data configurations as possible. This built-in trade-off, often called the Occam factor \cite{mackay1992bayesian}, is what makes evidence maximization a principled way to learn hyperparameters: unlike maximizing the joint posterior over $(\vec a, \vec\chi)$, which would happily overfit by moving the basis towards the noisy data, the marginalization over $\vec a$ in \eqref{eq:evidence} automatically penalizes superfluous flexibility.
+
+The maximization can be carried out with gradient based methods because the gradient is available in closed form. Two matrix calculus identities are needed, both valid for any invertible matrix $\mathbf A(\chi)$: Jacobi's formula $\frac{\partial}{\partial \chi}\log|\mathbf{A}| = \operatorname{tr}\big(\mathbf{A}^{-1}\frac{\partial \mathbf A}{\partial \chi}\big)$, and $\frac{\partial \mathbf A^{-1}}{\partial \chi} = -\mathbf{A}^{-1} \frac{\partial \mathbf A}{\partial \chi} \mathbf{A}^{-1}$, which follows from differentiating $\mathbf A \mathbf A^{-1} = \mathbf I$. Applying them to \eqref{eq:log_evidence} gives, for each hyperparameter $\chi_i$,
+\begin{equation}
+    \frac{\partial \log p(\vec{g})}{\partial \chi_i} = \frac{1}{2}\vec{g}^T \mathbf{\Sigma}_{\text{evidence}}^{-1}\frac{\partial \mathbf{\Sigma}_{\text{evidence}}}{\partial \chi_i}\mathbf{\Sigma}_{\text{evidence}}^{-1} \vec{g} - \frac{1}{2} \operatorname{tr}\left(\mathbf{\Sigma}_{\text{evidence}}^{-1} \frac{\partial \mathbf{\Sigma}_{\text{evidence}}}{\partial \chi_i}\right), \label{eq:gradient_generic}
+\end{equation}
+where, from \eqref{covariannce_evidence_woodbury}, and since the noise covariance does not depend on $\vec\chi$,
+\begin{equation}
+    \frac{\partial \mathbf{\Sigma}_{\text{evidence}}}{\partial \chi_i}
+    =  \frac{\partial \mathbf{M}}{\partial \chi_i} \mathbf{\Sigma}_a \mathbf{M}^T + \mathbf{M} \mathbf{\Sigma}_a \frac{\partial \mathbf{M}^T}{\partial \chi_i}.
+\end{equation}
+The two terms above are transposes of each other, and both the quadratic form and the trace in \eqref{eq:gradient_generic} are invariant under transposition of their middle factor, so each term contributes equally and
+\begin{align}
+    \frac{\partial \log p(\vec{g})}{\partial \chi_i} &= \vec{g}^T \mathbf{\Sigma}_{\text{evidence}}^{-1} \left( \frac{\partial \mathbf{M}}{\partial \chi_i} \mathbf{\Sigma}_a \mathbf{M}^T   \right) \mathbf{\Sigma}_{\text{evidence}}^{-1} \vec{g} -  \operatorname{tr}\left( \left( \frac{\partial \mathbf{M}}{\partial \chi_i} \mathbf{\Sigma}_a \mathbf{M}^T  \right)\mathbf{\Sigma}_{\text{evidence}}^{-1}\right). \label{eq:gradient_log_evidence}
+\end{align}
+The generic formula \eqref{eq:gradient_generic} holds for any parameter that enters the evidence covariance, and we will reuse it repeatedly below.
+
+\subsection{Learning the prior scales: automatic relevance determination} \label{sec:ard}
+The evidence depends not only on the basis parameters $\vec{\chi}$ but also on the scale of the prior. Unlike the noise, whose covariance is fixed by the sensors and known, the prior scale is rarely known in advance, so we learn it by the same evidence maximization. Consider a prior with an individual variance for each basis function,
+\begin{equation}
+    \mathbf{\Sigma}_a = \operatorname{diag}(\alpha_1^{-1}, \alpha_2^{-1}, \ldots, \alpha_N^{-1}),
+\end{equation}
+where $\alpha_i$ is the precision (inverse variance) of the coefficient $a_i$. The gradient of the log evidence with respect to each precision is given by the generic formula \eqref{eq:gradient_generic} with
+\begin{equation}
+    \frac{\partial \mathbf{\Sigma}_{\text{evidence}}}{\partial \alpha_i} = -\frac{1}{\alpha_i^2}\, \vec{m}_i \vec{m}_i^T,
+\end{equation}
+where $\vec{m}_i$ is the $i$-th column of $\mathbf{M}$. For these scale parameters, however, one can do better than gradient steps. As we derive in Section~\ref{sec:mstep} (of which the present setting is the fixed-boundary special case), the evidence can be increased by the closed-form update
+\begin{equation}
+    \alpha_i^{\text{new}} = \frac{1}{\mu_{\text{post},i}^2 + (\mathbf{\Sigma}_{\text{post}})_{ii}}, \label{eq:em_updates}
+\end{equation}
+which is an expectation-maximization (EM) update: each application is guaranteed not to decrease the evidence, requires no step size or line search, and is therefore the robust default. The classical fixed-point update of MacKay and Tipping \cite{mackay1992bayesian,tipping2001sparse},
+\begin{equation}
+    \alpha_i^{\text{new}} = \frac{\gamma_i}{(\mu_{\text{post},i})^2}, \qquad
+    \gamma_i = 1 - \alpha_i (\mathbf{\Sigma}_{\text{post}})_{ii}, \label{eq:mackay_updates}
+\end{equation}
+where $\gamma_i \in [0,1]$ measures how well the coefficient $a_i$ is determined by the data, typically converges in fewer iterations, but it carries no monotonicity guarantee; a robust implementation uses it as an acceleration and falls back to \eqref{eq:em_updates} whenever the evidence fails to increase.
+
+Maximizing the evidence over the individual precisions $\alpha_i$ is known as automatic relevance determination (ARD), or sparse Bayesian learning \cite{mackay1992bayesian,tipping2001sparse}: for a basis function that does not help to explain the data, the optimal precision $\alpha_i \to \infty$, which pins $a_i$ to zero and effectively removes that basis function from the model. This gives a principled criterion to prune redundant sources. In the examples below we will see that maximizing the evidence over the source positions drags several sources to the same location, revealing that they are redundant; with automatic relevance determination such sources are switched off automatically instead.
+
+\section{Solution when the boundary is a random variable} \label{sec:random_boundary}
+It is common that the exact position of a sensor, where $\vec g$ is measured, is unknown, or that the boundary of the domain itself is uncertain. To account for these cases we consider the boundary points $\vec x$ to be random, with a Gaussian prior
+\begin{equation}
+    p(\vec{x}) = \mathcal N(\vec x \,|\, \vec{\mu}_x,\, \mathbf{\Sigma}_x),
+\end{equation}
+where $\vec\mu_x$ is the nominal boundary and $\mathbf{\Sigma}_x$ encodes how far the true points may lie from it. The matrix $\mathbf{M}$ now depends on the random variable $\vec x$, so the posterior of the coefficients and the evidence require marginalizing over $\vec x$:
+\begin{equation}
+    p(\vec{a}|\vec{g}) = \int p(\vec{a}|\vec{g},\vec{x})\,p(\vec{x}|\vec{g})\,d\vec{x}, \qquad
+    p(\vec{g}) = \int p(\vec{g}|\vec{x})\,p(\vec{x})\,d\vec{x}. \label{eq:marginalization_x}
+\end{equation}
+Because $\mathbf M$ is a nonlinear function of $\vec x$, these integrals have no closed form, and the posterior and the evidence are no longer Gaussian.
+
+\subsection{Linearization, and why the problem stops being Gaussian} \label{sec:linearization}
+Since the prior keeps $\vec x$ close to $\vec\mu_x$, we linearize $\mathbf{M}$ around the mean boundary,
+\begin{equation} \label{eq:linearization_M}
+    \mathbf{M}(\vec{x},\vec{\chi}) \approx \mathbf{M}(\vec{\mu}_x,\vec{\chi}) + \sum_k \frac{\partial \mathbf{M}}{\partial x_k}(\vec{\mu}_x,\vec{\chi})\, \delta x_k, \qquad \delta \vec{x} = \vec{x} - \vec{\mu}_x,
+\end{equation}
+and to lighten the notation we write, from now on,
+\begin{equation}
+    \mathbf M = \mathbf M(\vec{\mu}_x, \vec\chi), \qquad \mathbf M_k = \frac{\partial \mathbf{M}}{\partial x_k}(\vec{\mu}_x, \vec\chi),
+\end{equation}
+omitting the dependence on $\vec\chi$. We also assume that the noise covariance varies slowly along the boundary, $\mathbf{\Sigma}(\vec{x})\approx \mathbf{\Sigma}(\vec{\mu}_x)$. Substituting \eqref{eq:linearization_M} into the data model \eqref{eq:model} gives
+\begin{equation}
+    \vec{g} = \mathbf{M}\vec{a} + \sum_k \mathbf{M}_k \vec a\; \delta x_k + \vec{\epsilon}
+    = \mathbf{M}\vec{a} + \mathbf{D}(\vec a)\,\delta\vec x + \vec{\epsilon}, \label{eq:linearized_model}
+\end{equation}
+where we collected the perturbation into the matrix $\mathbf{D}(\vec{a})$ whose $k$-th column is $\mathbf{M}_k \vec{a}$. The model \eqref{eq:linearized_model} is the starting point for everything that follows. Its essential feature is that it is \emph{bilinear}: linear in $\vec a$ for fixed $\delta\vec x$, and linear in $\delta \vec x$ for fixed $\vec a$, but not linear in the pair --- note that $\mathbf D(\vec a)\,\delta\vec x$ multiplies the two unknowns together.
+
+This bilinearity is what breaks Gaussianity. For fixed $\vec a$, the right-hand side of \eqref{eq:linearized_model} is a linear combination of the independent Gaussian variables $\delta\vec x \sim \mathcal N(\vec 0, \mathbf{\Sigma}_x)$ and $\vec\epsilon \sim \mathcal N(\vec 0, \mathbf{\Sigma})$, so the conditional distribution of the data given the coefficients is Gaussian, with mean $E[\vec g|\vec a] = \mathbf M \vec a$ and covariance $\operatorname{Cov}[\vec g|\vec a] = \mathbf{D}(\vec{a})\mathbf{\Sigma}_x \mathbf{D}(\vec{a})^T + \mathbf{\Sigma}$:
+\begin{equation}
+    p(\vec{g}|\vec{a}) = \mathcal N\big(\vec g \,\big|\, \mathbf{M}\vec a,\; \mathbf{\Sigma} + \mathbf{D}(\vec{a})\mathbf{\Sigma}_x \mathbf{D}(\vec{a})^T\big). \label{eq:marginal_likelihood_a}
+\end{equation}
+The boundary uncertainty therefore acts as extra, coefficient-dependent noise: the larger the coefficients, the more a given position error perturbs the data. But precisely because the covariance in \eqref{eq:marginal_likelihood_a} depends on $\vec{a}$ --- including through the normalization $|2\pi(\mathbf{\Sigma} + \mathbf{D}(\vec{a})\mathbf{\Sigma}_x\mathbf{D}(\vec{a})^T)|^{-1/2}$, which cannot be discarded as a constant --- the joint $p(\vec a, \vec g) = p(\vec g|\vec a)\,p(\vec a)$ is not Gaussian in $\vec{a}$, and neither the posterior nor the evidence is available in closed form. We therefore need an approximation. We present two: a simple one-shot moment-matching approximation in the remainder of this section, and the variational method of Section~\ref{sec:vbem}, which is the main method of this paper.
+
+\subsection{A first approximation: moment matching} \label{sec:moment_matching}
+As we prove in Appendix~\ref{variational_inference}, the Gaussian that best approximates a given distribution, in the sense of the forward KL divergence, is the one with the same mean and covariance. This suggests approximating the exact joint $p(\vec a, \vec g)$ by the Gaussian $q(\vec a, \vec g)$ that matches its first two moments, all of which are computable. Both means vanish: $E[\vec a] = \vec 0$ by the prior, and, by the tower property of expectations, $E[\vec g] = E\big[E[\vec g|\vec a]\big] = \mathbf M\, E[\vec a] = \vec 0$. For the second moments, the blocks involving $\vec a$ are unchanged from the fixed-boundary case \eqref{eq:joint_fixed},
+\begin{equation}
+    E[\vec a \vec a^T] = \mathbf{\Sigma}_a, \qquad
+    E[\vec{a}\vec{g}^T] = E[\vec a\vec a^T]\,\mathbf M^T + \sum_k E[\vec a \vec a^T \delta x_k]\,\mathbf{M}_k^T + E[\vec a\vec\epsilon^T] = \mathbf{\Sigma}_a\mathbf{M}^T,
+\end{equation}
+where the perturbation term vanishes because $\delta\vec x$ has zero mean and is independent of $\vec a$. The data block picks up one new term. By the tower property, $E[\vec g\vec g^T] = E\big[\operatorname{Cov}[\vec g|\vec a]\big] + E\big[E[\vec g|\vec a]\,E[\vec g|\vec a]^T\big]$, and reading the conditional moments off \eqref{eq:marginal_likelihood_a},
+\begin{equation}
+    E[\vec g\vec g^T]
+    = \mathbf{\Sigma} + \mathbf{C}_x + \mathbf{M}\mathbf{\Sigma}_a\mathbf{M}^T,
+\end{equation}
+where the boundary uncertainty enters through
+\begin{equation}
+    \mathbf{C}_x := E\big[\mathbf{D}(\vec a)\,\mathbf{\Sigma}_x\,\mathbf{D}(\vec a)^T\big]
+    = \sum_{k,l} \Sigma_x^{kl}\; \mathbf{M}_k\, E[\vec a\vec a^T]\, \mathbf{M}_l^T
+    = \sum_{k,l} \Sigma_x^{kl}\; \mathbf{M}_k \,\mathbf{\Sigma}_a\, \mathbf{M}_l^T, \label{eq:Cx}
+\end{equation}
+using that the $k$-th column of $\mathbf D(\vec a)$ is $\mathbf M_k\vec a$. Swapping the order of the sums, the components of $\mathbf C_x$ can also be written as
+\begin{equation}
+    C_x^{rs} = \operatorname{tr}\left(\mathbf{\Sigma}_a \mathbf{J}_r \mathbf{\Sigma}_x \mathbf{J}_s^T\right), \qquad (\mathbf{J}_r)_{mk}=\frac{\partial M^{rm}}{\partial x_k}(\vec\mu_x), \label{eq:C_x_component}
+\end{equation}
+i.e.\ $\mathbf J_r$ is the gradient of the $r$-th row of $\mathbf M$ with respect to the boundary points. If $\mathbf{\Sigma}_x$ is block diagonal --- for instance when the position errors of different sensors are independent --- then \eqref{eq:C_x_component} only needs to be computed over the corresponding blocks.
+
+The moment-matched joint is therefore identical to the fixed-boundary joint \eqref{eq:joint_fixed}, except that the noise covariance is inflated to the effective covariance $\mathbf{\Sigma} + \mathbf{C}_x$. Conditioning with \eqref{eq:conditioning} then gives at once the approximate evidence and posterior: every formula of Section~\ref{sec:fixed_boundary} carries over with $\mathbf{\Sigma} \to \mathbf{\Sigma} + \mathbf{C}_x$, in particular
+\begin{align}
+    &q(\vec g) = \mathcal N\big(\vec 0,\; \mathbf{\Sigma} + \mathbf{C}_x + \mathbf{M}\mathbf{\Sigma}_a\mathbf{M}^T\big), \label{covariannce_evidence_x}\\
+    &\vec{\mu}_{\text{post}}=  \big(\mathbf{M}^T (\mathbf{\Sigma}+ \mathbf{C}_x)^{-1} \mathbf{M} + \mathbf{\Sigma}_a^{-1}\big)^{-1}    \mathbf{M}^T (\mathbf{\Sigma}+\mathbf{C}_x)^{-1}\vec{g}, \label{eq:approx_posterior_mean}\\
+    &\mathbf{\Sigma}_{\text{post}}=\big(\mathbf{M}^T (\mathbf{\Sigma}+\mathbf{C}_x)^{-1} \mathbf{M} + \mathbf{\Sigma}_a^{-1}\big)^{-1}, \label{eq:approx_posterior_covariance}
+\end{align}
+with the equivalent data-sized forms again given by the Woodbury identity \eqref{eq:woodbury}, and the field posterior by \eqref{eq:field_posterior}. The hyperparameters can be learned exactly as in Section~\ref{sec:evidence_maximization} by maximizing the approximate log evidence: the generic gradient \eqref{eq:gradient_generic} applies with the evidence covariance $\mathbf{\Sigma}_{\text{evidence}} = \mathbf{\Sigma} + \mathbf{C}_x + \mathbf{M}\mathbf{\Sigma}_a\mathbf{M}^T$, which now depends on $\vec\chi$ also through $\mathbf C_x$,
+\begin{equation}
+    \frac{\partial \mathbf{\Sigma}_{\text{evidence}}}{\partial \chi_i} = \frac{\partial \mathbf{M}}{\partial \chi_i}\mathbf{\Sigma}_a\mathbf{M}^T + \mathbf{M}\mathbf{\Sigma}_a\frac{\partial \mathbf{M}^T}{\partial \chi_i} + \sum_{k,l} \Sigma_x^{kl} \left(\frac{\partial \mathbf{M}_k}{\partial \chi_i} \mathbf{\Sigma}_a \mathbf{M}_l^T + \mathbf{M}_k \mathbf{\Sigma}_a \frac{\partial \mathbf{M}_l^T}{\partial \chi_i} \right), \label{eq:gradient_log_evidence_x}
+\end{equation}
+where $\partial \mathbf M_k/\partial\chi_i = \partial^2\mathbf M/\partial\chi_i\partial x_k$. The quality of the Gaussian approximation is quantified by the KL divergence between the true and the matched distributions; although it is not available in closed form, it can be estimated by Monte Carlo sampling from the linearized model, which gives a diagnostic of when moment matching is adequate.
+
+Moment matching is attractively simple --- one extra matrix $\mathbf{C}_x$, and everything else carries over --- and it is the approximation used in the examples of Section~\ref{sec:examples}. It has, however, two structural shortcomings, and identifying them tells us exactly what a better method must do.
+
+First, $\mathbf{C}_x$ in \eqref{eq:Cx} is built with the \emph{prior} second moment $E[\vec a\vec a^T] = \mathbf{\Sigma}_a$, while the size of the perturbation transmitted by the boundary uncertainty scales with the actual coefficients: given $\vec a$, the perturbation $\mathbf D(\vec a)\delta\vec x$ has covariance $\mathbf D(\vec a)\mathbf{\Sigma}_x\mathbf D(\vec a)^T$. When the data are informative the posterior of $\vec a$ differs substantially from the prior, and the prior-based $\mathbf{C}_x$ misestimates this contribution. One may be tempted to iterate --- recompute $\mathbf{C}_x$ with the posterior second moment $\mathbf{\Sigma}_{\text{post}} + \vec\mu_{\text{post}}\vec\mu_{\text{post}}^T$ and repeat --- but this relinearization ascends no single objective, comes with no convergence guarantee, and, by reusing the fitted coefficients inside the noise model, tends to under-report the posterior uncertainty.
+
+Second, moment matching cannot learn the boundary. The cross covariance between the boundary perturbation and the data vanishes at this order: from \eqref{eq:linearized_model},
+\begin{equation}
+    E[\delta\vec{x}\,\vec{g}^T] = E[\delta\vec{x}\,\vec{a}^T]\,\mathbf{M}^T + E[\delta\vec{x}\,\delta\vec{x}^T]\,E[\mathbf D(\vec a)]^T + E[\delta\vec x\,\vec\epsilon^T] = \mathbf 0,
+\end{equation}
+because $\vec{a}$, $\delta\vec{x}$ and $\vec\epsilon$ are mutually independent with zero mean, and $\mathbf{D}$ is linear in $\vec{a}$ so that $E[\mathbf D(\vec a)] = \mathbf D(E[\vec a]) = \mathbf 0$. A moment-matched Gaussian on the triple $(\vec a, \delta\vec x, \vec g)$ therefore carries no correlation between $\delta\vec{x}$ and $\vec{g}$, and conditioning on the data simply returns the prior for $\delta\vec x$. (This also shows that the approximation $p(\vec x|\vec g)\approx p(\vec x)$, implicit in using \eqref{eq:approx_posterior_mean} for the first integral of \eqref{eq:marginalization_x}, is accurate to first order.) The boundary is informed only through its \emph{interaction} with the coefficients --- the bilinear term $\mathbf D(\vec a)\delta\vec x$ --- which a joint Gaussian, having only second moments, cannot represent. Both shortcomings are cured by the variational method of the next section, which retains this interaction through an iteration that provably increases a single well-defined objective.
+
+\section{Variational evidence maximization} \label{sec:vbem}
+We now develop the main method of this paper: a single iterative scheme that infers the coefficients $\vec a$ and the boundary perturbation $\delta\vec x$, and learns the hyperparameters --- the basis parameters $\vec\chi$ and the ARD prior precisions $\alpha_i$ of Section~\ref{sec:ard} --- by monotonically increasing one scalar objective, a lower bound on the log evidence. The measurement noise covariance $\mathbf{\Sigma}$ remains known and fixed throughout, as stated in Section~\ref{sec:fixed_boundary}. When the boundary is known exactly, the scheme reduces to the exact evidence maximization of Section~\ref{sec:evidence_maximization}. Throughout this section the model is the linearized one, \eqref{eq:linearized_model}, and we omit the conditional dependence on the hyperparameters $\vec\theta = (\vec\chi, \{\alpha_i\})$.
+
+\subsection{The evidence lower bound} \label{sec:elbo}
+Collect the latent (unobserved) variables in $\vec z = (\vec a, \delta\vec x)$. The log evidence, 
+\[
+\log p(\vec g) = \log \int p(\vec g|\vec z)\, p(\vec z)\, d\vec z,
+\]
+is exactly the intractable integral of Section~\ref{sec:random_boundary}. The variational idea is to introduce a tractable trial distribution $q(\vec z)$ to approximate the intractable posterior $p(\vec z|\vec g)$ of the latent variables at the current hyperparameters, and the approximation error is accounted for exactly below. For \emph{any} probability density $q(\vec z)$ we may write, using $p(\vec g, \vec z) = p(\vec z|\vec g)\,p(\vec g)$ and $\int q(\vec z)\,d\vec z = 1$,
+\begin{align}
+    &\log p(\vec g) = \int q(\vec z) \log p(\vec g)\, d\vec z
+    = \mathcal F(q) + \underbrace{\int q(\vec z) \log \frac{q(\vec z)}{p(\vec z|\vec g)}\, d\vec z}_{=\,D_{KL}(q \,\|\, p(\vec z|\vec g))}. \label{eq:elbo_decomposition}
+    \\ \label{def:F}
+    & \text{with} \quad 
+    \mathcal F(q) := \int q(\vec z) \log \frac{p(\vec g, \vec z)}{q(\vec z)}\, d\vec z,
+    \quad 
+\end{align}
+The first term, $\mathcal F$, is called the evidence lower bound, or negative variational free energy; the second is the KL divergence from the trial distribution to the exact posterior. Since the KL divergence is nonnegative and vanishes only when its two arguments are equal (Gibbs' inequality, proved in Appendix~\ref{variational_inference}), the decomposition \eqref{eq:elbo_decomposition} has two consequences that together are the entire basis of the method:
+\begin{enumerate}
+    \item $\mathcal F(q) \le \log p(\vec g)$ for every $q$, with equality if and only if $q$ is the exact posterior. Hence, for fixed hyperparameters, maximizing $\mathcal F$ over $q$ is the same as driving $q$ as close as possible (in KL) to the posterior: this is the \emph{inference} step.
+    \item For fixed $q$, increasing $\mathcal F$ over $\vec\theta$ pushes up a lower bound on the log evidence: this is the \emph{learning} step, the tractable surrogate for the exact evidence maximization of Section~\ref{sec:evidence_maximization}.
+\end{enumerate}
+Alternating the two steps is called variational expectation maximization \cite{beal2003variational,bishop2006pattern}. Every update, whether of $q$ or of $\vec\theta$, increases the \emph{same} scalar $\mathcal F$, so the iteration ascends monotonically and, being bounded above by the log evidence, converges. This monotonicity is also a practical robustness device: any implementation error, or any too-aggressive optimization step, reveals itself immediately as a decrease of $\mathcal F$.
+
+For our model the joint distribution factorizes as $p(\vec g, \vec z) = p(\vec g|\vec a, \delta\vec x)\, p(\vec a)\, p(\delta\vec x)$, because the coefficients and the boundary are independent a priori. Splitting the logarithm in $\mathcal F$ accordingly, for a trial distribution that factorizes in the same way (introduced next),
+\begin{equation} \label{eq:elbo_model}
+    \mathcal F(q) = E_q[\log p(\vec g|\vec a, \delta\vec x)] - D_{KL}\big(q(\vec a)\,\|\,p(\vec a)\big) - D_{KL}\big(q(\delta\vec x)\,\|\,p(\delta\vec x)\big). 
+\end{equation}
+The first term rewards fitting the data; the two KL terms penalize the posterior factors for straying from their priors. This is the Occam trade-off of Section~\ref{sec:evidence_maximization} again, now in variational form. Maximizing $\mathcal F$ over $q$ and $\vec\theta$ leads to a globally more accurate posterior approximation than a local Laplace expansion \cite[Chapter 10]{bishop2006pattern}.
+
+\subsection{Mean-field factorization and the optimal factors} \label{sec:mean_field}
+We restrict the trial distribution to the factorized (mean-field) family
+\begin{equation} \label{app:mean_field}
+    q(\vec a, \delta\vec x) = q(\vec a)\, q(\delta\vec x),
+\end{equation}
+whose two factors $q(\vec a)$ and $q(\delta\vec x)$ are, respectively, our approximations to the marginal posteriors $p(\vec a|\vec g,\vec\theta)$ and $p(\delta\vec x|\vec g,\vec\theta)$ of the coefficients and of the boundary perturbation given the data at the current hyperparameters. The factorization is the only approximation made beyond the linearization \eqref{eq:linearization_M}: it neglects posterior \emph{correlations} between coefficients and boundary, but, unlike moment matching, it retains their full interaction through the iteration below. The optimal factors satisfy a simple stationarity condition, which we derive next. 
+
+Hold $q(\delta\vec x)$ fixed and view $\mathcal F$ as a functional of $q(\vec a)$ alone, then substitute the factorization \eqref{app:mean_field} into \eqref{eq:elbo_model} to reach:
+\begin{multline}
+    \mathcal F(q) = \int q(\vec a)\, E_{q(\delta\vec x)}\big[\log p(\vec g| \vec a, \delta\vec x)\big]\, d\vec a + \int q(\vec a)\log \frac{p(\vec a)}{q(\vec a)}\, d\vec a + \text{const}
+    \\
+    = -D_{KL}\big(q(\vec a)\,\|\,\tilde p(\vec a)\big) + \text{const},
+\end{multline}
+where the constants do not depend on $q(\vec a)$ and $\tilde p$ is the normalized density
+\begin{equation}
+    \tilde p(\vec a) \propto \exp\Big(E_{q(\delta\vec x)}\big[\log p(\vec g | \vec a, \delta\vec x)\big]\Big) p(\vec a);
+\end{equation}
+the normalization of $\tilde p$ is absorbed into the constant. By Gibbs' inequality the unique maximizer over $q(\vec a)$ is $q(\vec a) = \tilde p(\vec a)$, that is,
+\begin{equation}
+    \log q^*(\vec a) = E_{q(\delta\vec x)}\big[\log p(\vec g|\vec a, \delta\vec x)\big] + \log p(\vec a) + \text{const}, \label{eq:optimal_factor}
+\end{equation}
+and symmetrically for $q^*(\delta\vec x)$ with the roles of $\vec a$ and $\delta\vec x$ exchanged. This is the standard mean-field coordinate ascent \cite{bishop2006pattern}: each update is the \emph{exact} maximizer of $\mathcal F$ over its factor, so no further approximation enters.
+
+The bilinear structure of the model now pays off. The log-likelihood of \eqref{eq:linearized_model} is
+\begin{equation}
+    \log p(\vec g|\vec a, \delta\vec x) = -\frac{1}{2}\,\vec r^{\,T}\mathbf{\Sigma}^{-1}\vec r - \frac{1}{2}\log|2\pi\mathbf{\Sigma}|, \qquad \vec r := \vec g - \mathbf M\vec a - \mathbf D(\vec a)\,\delta\vec x, \label{eq:loglik}
+\end{equation}
+which is a quadratic form in $\vec a$ for fixed $\delta\vec x$, and a quadratic form in $\delta\vec x$ for fixed $\vec a$. Expectations of quadratics under Gaussians are again quadratics, so both optimal factors \eqref{eq:optimal_factor} are Gaussian with closed-form parameters, which we now compute. We write
+\begin{equation}
+    q(\vec a) = \mathcal N(\vec\mu_{\text{post}}, \mathbf{\Sigma}_{\text{post}}), \qquad q(\delta\vec x) = \mathcal N(\vec\mu_{\delta x}, \mathbf{\Sigma}_{\delta x}),
+\end{equation}
+and use throughout the two elementary Gaussian identities proved in Appendix~\ref{app:identities}: for a Gaussian vector $\vec w$ with mean $\vec m$ and covariance $\mathbf V$, and any constant vector $\vec c$ and symmetric matrix $\mathbf A$,
+\begin{equation}
+    E\big[(\vec c-\vec w)^T \mathbf A\, (\vec c-\vec w)\big] = (\vec c-\vec m)^T \mathbf A\, (\vec c-\vec m) + \operatorname{tr}(\mathbf A \mathbf V), \qquad
+    E\big[\vec w^T \mathbf A\, \vec w\big] = \vec m^T \mathbf A\, \vec m + \operatorname{tr}(\mathbf A \mathbf V). \label{eq:quad_expectations}
+\end{equation}
+
+\subsection{E-step I: updating the coefficients} \label{sec:estep_a}
+To evaluate \eqref{eq:optimal_factor} we need the expectation of \eqref{eq:loglik} over $q(\delta\vec x)$ at fixed $\vec a$. Given $\vec a$, the random part of the residual is $\vec w = \mathbf D(\vec a)\,\delta\vec x$, with mean $\mathbf D(\vec a)\vec\mu_{\delta x}$ and covariance $\mathbf D(\vec a)\mathbf{\Sigma}_{\delta x}\mathbf D(\vec a)^T$, so the first identity of \eqref{eq:quad_expectations} with $\vec c = \vec g - \mathbf M\vec a$ gives
+\begin{equation}
+    E_{q(\delta\vec x)}\big[\vec r^{\,T}\mathbf{\Sigma}^{-1}\vec r\big] = \big(\vec g - \mathbf M\vec a - \mathbf D(\vec a)\vec\mu_{\delta x}\big)^T\mathbf{\Sigma}^{-1}\big(\vec g - \mathbf M\vec a - \mathbf D(\vec a)\vec\mu_{\delta x}\big) + \operatorname{tr}\big(\mathbf{\Sigma}^{-1}\mathbf D(\vec a)\mathbf{\Sigma}_{\delta x}\mathbf D(\vec a)^T\big).
+\end{equation}
+Both terms are quadratics in $\vec a$. For the first, since the $k$-th column of $\mathbf D(\vec a)$ is $\mathbf M_k \vec a$,
+\begin{equation}
+    \mathbf M \vec a + \mathbf D(\vec a)\vec\mu_{\delta x} = \Big(\mathbf M + \sum_k \mu_{\delta x, k}\,\mathbf M_k\Big)\vec a =: \bar{\mathbf M}\,\vec a, \label{eq:Mbar}
+\end{equation}
+where $\bar{\mathbf M}$ is the model matrix evaluated, to first order, at the current boundary estimate $\vec\mu_x + \vec\mu_{\delta x}$. For the second,
+\begin{equation}
+    \operatorname{tr}\big(\mathbf{\Sigma}^{-1}\mathbf D(\vec a)\mathbf{\Sigma}_{\delta x}\mathbf D(\vec a)^T\big)
+    = \sum_{k,l} \Sigma_{\delta x}^{kl}\, (\mathbf M_k\vec a)^T\mathbf{\Sigma}^{-1}\mathbf M_l\vec a
+    = \vec a^T \mathbf\Gamma\, \vec a, \qquad
+    \mathbf\Gamma := \sum_{k,l} \Sigma_{\delta x}^{kl}\, \mathbf M_k^T\,\mathbf{\Sigma}^{-1}\mathbf M_l. \label{eq:Gamma}
+\end{equation}
+Altogether,
+\begin{equation}
+    E_{q(\delta\vec x)}\big[\log p(\vec g|\vec a, \delta\vec x)\big] = -\frac12 \big(\vec g - \bar{\mathbf M}\vec a\big)^T\mathbf{\Sigma}^{-1}\big(\vec g - \bar{\mathbf M}\vec a\big) - \frac12\, \vec a^T \mathbf\Gamma\, \vec a + \text{const}. \label{eq:expected_loglik_a}
+\end{equation}
+Adding $\log p(\vec a) = -\frac12 \vec a^T\mathbf{\Sigma}_a^{-1}\vec a + \text{const}$, as prescribed by \eqref{eq:optimal_factor}, and completing the square with \eqref{eq:complete_square}, the optimal coefficient factor is the Gaussian with
+\begin{equation}
+    \mathbf{\Sigma}_{\text{post}}=\left(\bar{\mathbf{M}}^T\mathbf{\Sigma}^{-1}\bar{\mathbf{M}}+\mathbf{\Gamma}+\mathbf{\Sigma}_a^{-1}\right)^{-1},\qquad
+    \vec{\mu}_{\text{post}}=\mathbf{\Sigma}_{\text{post}}\,\bar{\mathbf{M}}^T\mathbf{\Sigma}^{-1}\vec{g}. \label{eq:vb_coefficient_update}
+\end{equation}
+This has exactly the form of the fixed-boundary posterior \eqref{eq:posterior_covariance}--\eqref{eq:posterior_mean}, with two transparent changes: the model matrix is shifted to the current boundary estimate, and the residual boundary uncertainty enters as the additional precision $\mathbf\Gamma$ --- a well-defined ridge that tempers the coefficients in precisely the directions most sensitive to boundary errors. Note that $\mathbf\Gamma$ requires no guess for $E[\vec a\vec a^T]$: it is driven by the current boundary factor $q(\delta\vec x)$, which resolves the ambiguity that plagued the iterated version of $\mathbf C_x$ in Section~\ref{sec:moment_matching}.
+
+\subsection{E-step II: updating the boundary} \label{sec:estep_x}
+Now hold $q(\vec a)$ fixed and evaluate the expectation of \eqref{eq:loglik} over $q(\vec a)$ at fixed $\delta\vec x$. Expanding the quadratic and keeping only the terms that depend on $\delta\vec x$,
+\begin{equation}
+    E_{q(\vec a)}\big[\log p(\vec g|\vec a, \delta\vec x)\big] = -\frac12\, \delta\vec x^T\, E_{q(\vec a)}\big[\mathbf D(\vec a)^T\mathbf{\Sigma}^{-1}\mathbf D(\vec a)\big]\,\delta\vec x + \delta\vec x^T\, E_{q(\vec a)}\big[\mathbf D(\vec a)^T \mathbf{\Sigma}^{-1}(\vec g - \mathbf M\vec a)\big] + \text{const}.
+\end{equation}
+Because $\mathbf D$ is linear in $\vec a$, the two expectations are of quadratic and linear-plus-quadratic functions of $\vec a$; the second identity of \eqref{eq:quad_expectations}, with $E_{q(\vec a)}[\vec a] = \vec\mu_{\text{post}}$ and $E_{q(\vec a)}[\vec a\vec a^T] = \mathbf{\Sigma}_{\text{post}} + \vec\mu_{\text{post}}\vec\mu_{\text{post}}^T$, evaluates them component-wise:
+\begin{align}
+    E_{q(\vec a)}\big[\mathbf D^T\mathbf{\Sigma}^{-1}\mathbf D\big]_{kl} &= E\big[\vec a^T \mathbf M_k^T\mathbf{\Sigma}^{-1}\mathbf M_l\, \vec a\big] = \vec{\mu}_{\text{post}}^T\mathbf M_k^T\mathbf{\Sigma}^{-1}\mathbf M_l\,\vec{\mu}_{\text{post}}+\operatorname{tr}\big(\mathbf M_k^T\mathbf{\Sigma}^{-1}\mathbf M_l\,\mathbf{\Sigma}_{\text{post}}\big), \label{eq:vb_boundary_precision}\\
+    E_{q(\vec a)}\big[\mathbf D^T\mathbf{\Sigma}^{-1}(\vec g - \mathbf M \vec a)\big]_{k} &= E\big[\vec a^T\mathbf M_k^T \mathbf{\Sigma}^{-1}(\vec g - \mathbf M\vec a)\big] = \vec{\mu}_{\text{post}}^T\mathbf M_k^T\mathbf{\Sigma}^{-1}\big(\vec{g}-\mathbf{M}\vec{\mu}_{\text{post}}\big)-\operatorname{tr}\big(\mathbf M_k^T\mathbf{\Sigma}^{-1}\mathbf{M}\,\mathbf{\Sigma}_{\text{post}}\big). \label{eq:vb_boundary_shift}
+\end{align}
+Adding the prior $\log p(\delta\vec x) = -\frac12\,\delta\vec x^T\mathbf{\Sigma}_x^{-1}\delta\vec x + \text{const}$ and completing the square, the optimal boundary factor is the Gaussian with
+\begin{equation}
+    \mathbf{\Sigma}_{\delta x} = \Big(E_{q(\vec a)}\big[\mathbf D^T\mathbf{\Sigma}^{-1}\mathbf D\big]+\mathbf{\Sigma}_x^{-1}\Big)^{-1},\qquad
+    \vec{\mu}_{\delta x}=\mathbf{\Sigma}_{\delta x}\, E_{q(\vec a)}\big[\mathbf D^T\mathbf{\Sigma}^{-1}(\vec g - \mathbf M\vec a)\big]. \label{eq:vb_boundary_update}
+\end{equation}
+The estimated boundary is $\vec\mu_x + \vec\mu_{\delta x}$, with uncertainty $\mathbf{\Sigma}_{\delta x}$. Note how the trace terms in \eqref{eq:vb_boundary_precision}--\eqref{eq:vb_boundary_shift} carry the coefficient uncertainty $\mathbf{\Sigma}_{\text{post}}$ into the boundary update: a naive scheme that simply fixed $\vec a = \vec\mu_{\text{post}}$ would drop them and report an overconfident boundary. This coupling in both directions --- $\mathbf{\Sigma}_{\delta x}$ feeding the precision penalty $\mathbf\Gamma$ of the coefficient update, and $\mathbf{\Sigma}_{\text{post}}$ feeding the traces of the boundary update --- is exactly the interaction between $\vec a$ and $\delta\vec x$ that moment matching discards, and it is what allows the data to inform the boundary here even though the first-order cross covariance $E[\delta\vec x\, \vec g^T]$ vanishes.
+
+After updating $\vec\mu_x \leftarrow \vec\mu_x + \vec\mu_{\delta x}$ it is best to recompute $\mathbf M$ and $\mathbf M_k$ at the new expansion point, and reset $\vec\mu_{\delta x} = \vec 0$. This relinearization is analogous to the iterated extended Kalman filter. It changes the model itself, so across a re-centering the values of $\mathcal F$ are not comparable; monotonicity should be monitored between, not across, re-centerings.
+
+\subsection{M-step: learning the prior and the basis} \label{sec:mstep}
+Holding both factors of $q$ fixed, we now increase $\mathcal F$ over the hyperparameters $\vec\theta$. In \eqref{eq:elbo_model} each hyperparameter appears in only one term: the precisions $\alpha_i$ only in the KL term of $q(\vec a)$, through the prior, and $\vec\chi$ only in the expected log-likelihood.
+
+\paragraph{Prior precisions.} With the ARD prior $p(\vec a) = \prod_i \mathcal N(a_i\,|\,0,\alpha_i^{-1})$, the only $\alpha$-dependent part of $\mathcal F$ is $E_q[\log p(\vec a)]$,
+\begin{equation}
+    E_q[\log p(\vec a)] = \frac12\sum_i \log\alpha_i - \frac12 \sum_i \alpha_i \langle a_i^2\rangle + \text{const}, \qquad
+    \langle a_i^2\rangle := \mu_{\text{post},i}^2 + (\mathbf{\Sigma}_{\text{post}})_{ii},
+\end{equation}
+using the second identity of \eqref{eq:quad_expectations} component-wise. Setting the derivative $\frac{1}{2\alpha_i} - \frac{1}{2}\langle a_i^2\rangle$ to zero maximizes each term separately:
+\begin{equation}
+    \alpha_i^{\text{new}} = \frac{1}{\langle a_i^2\rangle} = \frac{1}{\mu_{\text{post},i}^2 + (\mathbf{\Sigma}_{\text{post}})_{ii}}. \label{eq:alpha_update}
+\end{equation}
+Being the exact maximizer of $\mathcal F$ over $\alpha_i$, this update can never decrease the bound. In the fixed-boundary limit it is precisely the EM update quoted in \eqref{eq:em_updates}, and iterating it realizes automatic relevance determination: the precisions of unhelpful basis functions diverge and the corresponding functions are pruned.
+
+\paragraph{Expected data misfit.} Before turning to the basis parameters we evaluate the expected log-likelihood itself, which they enter through. With the known noise $\mathbf{\Sigma} = \sigma^2\mathbf I$ (a general known $\mathbf{\Sigma}$ works the same way, with the $\mathbf{\Sigma}^{-1}$-weighted norm),
+\begin{equation}
+    E_q[\log p(\vec g|\vec a, \delta\vec x)] = -\frac{N_g}{2}\log(2\pi\sigma^2) - \frac{R}{2\sigma^2}, \qquad R := E_q\big\|\vec g - \mathbf M\vec a - \mathbf D(\vec a)\,\delta\vec x\big\|^2. \label{eq:expected_loglik}
+\end{equation}
+To evaluate $R$, note that under the factorized $q$ the residual has mean $E_q[\vec r\,] = \vec g - \bar{\mathbf M}\vec\mu_{\text{post}}$, since $E_q[\mathbf D(\vec a)\,\delta\vec x] = \mathbf D(\vec\mu_{\text{post}})\vec\mu_{\delta x}$ by independence, and $R = \|E_q[\vec r\,]\|^2 + \operatorname{tr}\operatorname{Cov}_q(\vec r\,)$. Computing the covariance by taking the expectation first over $\delta\vec x$ and then over $\vec a$ (the same two-stage computation as in the E-steps) yields
+\begin{equation}
+    R = \big\|\vec g - \bar{\mathbf M}\vec\mu_{\text{post}}\big\|^2 + \operatorname{tr}\big(\bar{\mathbf M}\,\mathbf{\Sigma}_{\text{post}}\bar{\mathbf M}^T\big) + \sum_{k,l}\Sigma_{\delta x}^{kl}\operatorname{tr}\big(\mathbf M_k \langle \vec a\vec a^T\rangle \mathbf M_l^T\big), \qquad
+    \langle \vec a \vec a^T\rangle = \mathbf{\Sigma}_{\text{post}} + \vec\mu_{\text{post}}\vec\mu_{\text{post}}^T. \label{eq:R}
+\end{equation}
+The three terms of $R$ are, in order: the squared misfit of the mean solution, the extra misfit expected from the coefficient uncertainty, and the extra misfit expected from the residual boundary uncertainty. Since $\sigma^2$ is known there is nothing to update here, but the decomposition supplies a useful consistency diagnostic: at convergence $R/N_g$ should be comparable with the known $\sigma^2$. If it remains much larger, the data are being misfit by more than the sensors can explain --- typically the basis is too small (the truncation error of Section~\ref{sec:fixed_boundary} exceeds the measurement noise), or the boundary prior $(\vec\mu_x, \mathbf{\Sigma}_x)$ is wrong --- and the model, not the noise, should be revisited.
+
+\paragraph{Basis parameters.} The parameters $\vec\chi$ enter $\mathcal F$ only through $\mathbf M(\vec\chi)$ and $\mathbf M_k(\vec\chi)$ in the expected log-likelihood, $E_q[\log p(\vec g|\cdot)] = -R(\vec\chi)/(2\sigma^2) + \text{const}$, with $R$ given by \eqref{eq:R}. Differentiating the three terms of $R$, and using the symmetry of $\mathbf{\Sigma}_{\text{post}}$, $\langle\vec a\vec a^T\rangle$ and $\mathbf{\Sigma}_{\delta x}$ to pair transposed contributions as in Section~\ref{sec:evidence_maximization}, gives
+\begin{equation}
+    \frac{\partial \mathcal F}{\partial \chi_i} = \frac{1}{\sigma^2}\left[
+    \Big(\frac{\partial \bar{\mathbf M}}{\partial \chi_i}\vec\mu_{\text{post}}\Big)^T \big(\vec g - \bar{\mathbf M}\vec\mu_{\text{post}}\big)
+    - \operatorname{tr}\Big(\frac{\partial \bar{\mathbf M}}{\partial \chi_i}\,\mathbf{\Sigma}_{\text{post}}\bar{\mathbf M}^T\Big)
+    - \sum_{k,l}\Sigma_{\delta x}^{kl}\operatorname{tr}\Big(\frac{\partial \mathbf M_k}{\partial \chi_i}\,\langle\vec a\vec a^T\rangle\,\mathbf M_l^T\Big)\right], \label{eq:chi_gradient}
+\end{equation}
+where $\partial\bar{\mathbf M}/\partial\chi_i = \partial\mathbf M/\partial\chi_i + \sum_k \mu_{\delta x,k}\,\partial^2\mathbf M/\partial\chi_i\partial x_k$. Unlike for $\alpha_i$ there is no closed-form maximizer, so we take a small number of quasi-Newton (L-BFGS) steps along \eqref{eq:chi_gradient}, with a line search that only accepts steps increasing $\mathcal F$. Partial maximization is enough: the resulting procedure is a generalized EM algorithm and retains the monotone convergence guarantee \cite{bishop2006pattern}.
+
+The components of the nominal boundary $\vec\mu_x$ could also be treated as hyperparameters of this M-step (an empirical Bayes estimate of the boundary); we do not pursue this, because the boundary factor $q(\delta\vec x)$ together with the re-centering step already estimates the boundary, and additionally reports its uncertainty.
+
+\subsection{Monitoring the bound} \label{sec:monitoring}
+Every update above is guaranteed not to decrease $\mathcal F$, so the bound should be evaluated after each step and asserted to be non-decreasing: this is the cheapest and most effective correctness check of an implementation. All three terms of \eqref{eq:elbo_model} are explicit. The expected log-likelihood is given by \eqref{eq:expected_loglik} and \eqref{eq:R}, and the KL divergence between the Gaussians $\mathcal N(\vec\mu_1, \mathbf S_1)$ and $\mathcal N(\vec 0, \mathbf S_0)$ in dimension $n$ is (Appendix~\ref{app:identities})
+\begin{equation}
+    D_{KL}\big(\mathcal N(\vec\mu_1, \mathbf S_1)\,\|\,\mathcal N(\vec 0, \mathbf S_0)\big) = \frac12\left[\operatorname{tr}(\mathbf S_0^{-1}\mathbf S_1) + \vec\mu_1^T\mathbf S_0^{-1}\vec\mu_1 - n + \log\frac{|\mathbf S_0|}{|\mathbf S_1|}\right], \label{eq:gaussian_kl}
+\end{equation}
+applied once with $(\vec\mu_{\text{post}}, \mathbf{\Sigma}_{\text{post}}, \mathbf{\Sigma}_a)$ and once with $(\vec\mu_{\delta x}, \mathbf{\Sigma}_{\delta x}, \mathbf{\Sigma}_x)$.
+
+\subsection{Special cases, and the connection to exact evidence maximization} \label{sec:special_cases}
+Setting $\mathbf{\Sigma}_x \to \mathbf 0$ collapses $q(\delta\vec x)$ to a point mass at $\vec 0$: then $\bar{\mathbf M} = \mathbf M$, $\mathbf\Gamma = \mathbf 0$, and the coefficient update \eqref{eq:vb_coefficient_update} returns the \emph{exact} fixed-boundary posterior of Section~\ref{sec:fixed_boundary}. In that case the E-step attains $q(\vec a) = p(\vec a|\vec g)$ exactly, the KL term in \eqref{eq:elbo_decomposition} vanishes, and $\mathcal F$ equals the log evidence: the loop becomes exact evidence maximization, carried out with the EM update \eqref{eq:alpha_update} for the prior precisions and gradient ascent for the basis. The gradients also agree: whenever $q$ equals the exact posterior at the current hyperparameters, the function $\vec\theta \mapsto D_{KL}(q\,\|\,p(\vec z|\vec g,\vec\theta))$ is nonnegative and vanishes at the current $\vec\theta$, so its gradient vanishes there, and by \eqref{eq:elbo_decomposition} the gradient of $\mathcal F$ coincides with the gradient of the exact log evidence --- in particular \eqref{eq:chi_gradient} then agrees with \eqref{eq:gradient_log_evidence}. With uncertain boundary, performing a single coefficient update with $q(\delta\vec x)$ held at the prior plays the same role as the moment matching of Section~\ref{sec:moment_matching} --- both temper the coefficients by the prior boundary uncertainty, the variational update through the precision penalty $\mathbf\Gamma$, the moment-matched one through the inflated noise $\mathbf C_x$ --- which makes moment matching a natural initialization for the full iteration.
+
+\subsection{The complete algorithm} \label{sec:algorithm}
+Algorithm~\ref{alg:vem} collects the updates. Its final output is the goal of the whole construction: the posterior distribution of the coefficients, $q(\vec a) = \mathcal N(\vec\mu_{\text{post}}, \mathbf{\Sigma}_{\text{post}})$, evaluated at the learned basis and prior and the known noise, from which the field posterior follows by \eqref{eq:field_posterior}.
+
+\begin{algorithm}[t]
+\caption{Variational evidence maximization: learning the basis $\vec\chi$ and the prior $\{\alpha_i\}$, with known measurement noise $\sigma^2$, and predicting the posterior of the coefficients $\vec a$.}
+\label{alg:vem}
+\begin{algorithmic}[1]
+\Require data $\vec g$; known noise level $\sigma^2$; nominal boundary $\vec\mu_x$ with covariance $\mathbf{\Sigma}_x$; initial $\vec\chi$, $\{\alpha_i\}$
+\State $\vec\mu_{\delta x}\gets\vec 0$; $\mathbf{\Sigma}_{\delta x}\gets\mathbf{\Sigma}_x$; assemble $\mathbf M$ and $\mathbf M_k = \partial\mathbf M/\partial x_k$ at $(\vec\mu_x, \vec\chi)$
+\Repeat
+    \State \emph{E-step (inference):}
+    \State \quad update $q(\vec a)$: compute $\bar{\mathbf M}$, $\mathbf\Gamma$, then $\mathbf{\Sigma}_{\text{post}}$, $\vec\mu_{\text{post}}$ \Comment{\eqref{eq:Mbar}, \eqref{eq:Gamma}, \eqref{eq:vb_coefficient_update}}
+    \State \quad update $q(\delta\vec x)$: compute $\mathbf{\Sigma}_{\delta x}$, $\vec\mu_{\delta x}$ \Comment{\eqref{eq:vb_boundary_precision}--\eqref{eq:vb_boundary_update}}
+    \State \quad optionally re-center: $\vec\mu_x \gets \vec\mu_x + \vec\mu_{\delta x}$, reassemble $\mathbf M$, $\mathbf M_k$, $\vec\mu_{\delta x}\gets\vec 0$
+    \State \emph{M-step (learning):}
+    \State \quad $\alpha_i \gets 1/\big(\mu_{\text{post},i}^2 + (\mathbf{\Sigma}_{\text{post}})_{ii}\big)$; prune basis functions whose $\alpha_i$ exceeds a threshold \Comment{\eqref{eq:alpha_update}}
+    \State \quad a few L-BFGS steps on $\vec\chi$ along \eqref{eq:chi_gradient}, accepting only steps that increase $\mathcal F$
+    \State evaluate $\mathcal F$ from \eqref{eq:elbo_model} and \eqref{eq:gaussian_kl}; \textbf{assert} it has not decreased \Comment{except across a re-centering}
+\Until{the increase of $\mathcal F$ is below tolerance}
+\State check the misfit diagnostic $R/N_g \approx \sigma^2$ \Comment{\eqref{eq:R}; if $R/N_g \gg \sigma^2$, enlarge the basis or revisit $(\vec\mu_x, \mathbf{\Sigma}_x)$}
+\State \Return coefficient posterior $\mathcal N(\vec\mu_{\text{post}}, \mathbf{\Sigma}_{\text{post}})$; boundary posterior $\mathcal N(\vec\mu_x + \vec\mu_{\delta x}, \mathbf{\Sigma}_{\delta x})$; learned $(\vec\chi, \{\alpha_i\})$; field posterior $\vec\mu_u = \Phi\vec\mu_{\text{post}}$, $\mathbf{\Sigma}_u = \Phi\mathbf{\Sigma}_{\text{post}}\Phi^T$
+\end{algorithmic}
+\end{algorithm}
+
+A few implementation choices matter as much as the updates themselves for robustness in practice.
+\begin{itemize}
+    \item \emph{Unconstrained reparameterization.} Perform the gradient updates in the variables $\log\alpha_i$ (and, for the method of fundamental solutions, a logarithmic radial coordinate for the source distances). This removes positivity constraints, equalizes scales across parameters, and turns the ARD limit $\alpha_i\to\infty$ into a clean threshold on $\log\alpha_i$.
+    \item \emph{Numerical linear algebra.} Never form matrix inverses explicitly: compute every solve, log-determinant and trace through a Cholesky factorization of the relevant symmetric positive definite matrix, adding a small jitter to the diagonal if needed. As in Section~\ref{sec:fixed_boundary}, work with matrices of size $\min(N, N_g)$ by choosing the appropriate Woodbury form. This matters especially for the method of fundamental solutions, whose matrices are notoriously ill-conditioned when sources lie far from the boundary.
+    \item \emph{Multimodality.} The bound is smooth but generally multimodal in the source positions $\vec\chi$. Two complementary remedies: restart from several initial source configurations and keep the run with the highest final $\mathcal F$; and anneal by continuation on the noise --- run the first iterations with an inflated noise level $\tilde\sigma^2 > \sigma^2$, under which the objective is smoother, and decrease $\tilde\sigma^2$ geometrically down to the known $\sigma^2$ over a few outer iterations. Because the annealed iterations optimize a deliberately modified objective, the monotonicity assertion and all final results and comparisons of $\mathcal F$ must use the true $\sigma^2$. ARD absorbs the remaining redundancy: rather than letting several sources be dragged to the same location, the divergence $\alpha_i \to \infty$ switches the superfluous ones off, which is the better-conditioned outcome.
+    \item \emph{Initialization.} The moment-matching solution of Section~\ref{sec:moment_matching} provides a good starting point for $q(\vec a)$ and the hyperparameters at negligible extra cost.
+    \item \emph{Calibration of the variances.} The factorization $q(\vec a)\,q(\delta\vec x)$ neglects the posterior correlation between coefficients and boundary, so, like all mean-field approximations, it tends to underestimate posterior variances; this is also the origin of the fact that the boundary uncertainty enters \eqref{eq:vb_coefficient_update} as the positive precision $\mathbf\Gamma$, sharpening $q(\vec a)$ rather than broadening it. When calibrated error bars are essential, perform a final pass with a joint (non-factorized) Gaussian $q(\vec a, \delta\vec x)$ at the converged hyperparameters --- cheap, because the log-likelihood \eqref{eq:loglik} is bilinear --- or validate the variances against sampling.
+\end{itemize}
+
+\section{Method of Fundamental Solutions} \label{sec:mfs}
+
+In this section we will discuss the method of fundamental solutions, which is a particular case of the Trefftz method where the basis functions are chosen as the free space Green's functions of the differential operator $\mathbf{\hat{L}}$. So we have that the basis functions are given by
+\begin{equation}
+    \mathbf{\hat{L}} \vec{G}_i(\vec{x}, \vec{x}_i) = -\delta(\vec{x}-\vec{x}_i)\mathbf{I}
+\end{equation}
+where $\vec{x}_i$ are the source positions of the fundamental solutions. The overall sign of the fundamental solution is immaterial for the method, as it is absorbed by the coefficients $\vec{a}$. The solution can then be approximated as 
+\begin{equation}
+    \vec{u}(\vec{x}) \approx \sum_{i=1}^N \vec{G}_i(\vec{x}, \vec{x}_i)\, \vec{a}_i = \mathbf{G} \vec{a} \quad \text{where } \mathbf{G} = [\vec{G}_1(\vec{x}, \vec{x}_1) \ \vec{G}_2(\vec{x}, \vec{x}_2) \ \ldots \ \vec{G}_N(\vec{x}, \vec{x}_N)]
+\end{equation}
+For a scalar operator $\mathbf{\hat{L}}$ each fundamental solution $\vec{G}_i$ and coefficient $\vec{a}_i$ is a scalar, while for vector-valued problems $\vec{G}_i$ is the Green's tensor and each source carries a coefficient vector $\vec{a}_i$, as in the elastostatics example below; in both cases stacking all the coefficients into a single vector $\vec{a}$ recovers the linear structure of the previous sections. So the solution of the problem will be given by the same expressions for the posterior distribution of $\vec{a}$ and the evidence as in the previous section, but with the matrix $\mathbf{M}$ given by
+\begin{equation}
+    \mathbf{M}(\vec{x},\vec{\chi}) = [\mathbf{\hat{B}} \vec{G}_1(\vec{x}, \vec{x}_1) \ \mathbf{\hat{B}} \vec{G}_2(\vec{x}, \vec{x}_2) \ \ldots \ \mathbf{\hat{B}} \vec{G}_N(\vec{x}, \vec{x}_N)]
+\end{equation}
+where the hyperparameters $\vec{\chi}$ are the source positions $\vec{x}_i$ of the fundamental solutions. So we can find the optimal source positions by maximizing the evidence with respect to $\vec{\chi}$: when the boundary is known, using the gradient of the exact log evidence \eqref{eq:gradient_log_evidence}; when the boundary is uncertain, using either the moment-matched gradient built from \eqref{eq:gradient_log_evidence_x} or, preferably, the variational scheme of Algorithm~\ref{alg:vem}. Then obtain the posterior distribution of $\vec{a}$ and the evidence with the optimal source positions. After that we can find the distribution of $\vec{u}$ in the whole domain $\Omega$ using the relation $\vec{u} = \mathbf{G} \vec{a}$, which will be a  distribution with mean and covariance matrix given by
+\begin{equation}
+    \vec{\mu}_u = \mathbf{G} \vec{\mu}_{post} \quad \text{and} \quad  \mathbf{\Sigma}_u = \mathbf{G} \mathbf{\Sigma}_{post} \mathbf{G}^T.
+\end{equation}
+This distribution is exactly Gaussian when the boundary is known, and a Gaussian approximation when the boundary is uncertain.
+
+\section{Examples using the method of fundamental solutions} \label{sec:examples}
+\subsection{Laplace equation: Dirichlet problem in a disk}
+We will start testing the method on the Laplace equation in a unit disk, which is a simple case.
+\begin{equation}
+    \nabla^2 u = 0 
+\end{equation}
+And we choose a boundary condition with a simple analytical solution to be able to compare the results. We choose the following boundary condition
+\begin{equation}
+    u(1,\theta)= \cos\theta.
+    \end{equation}
+Doing separation of variables and considering that the solution should not blow up at the origin we have that the general solution is given by
+\begin{equation}
+    u(r,\theta)=a_0 + \sum_n r^n(a_n \cos(n\theta) + b_n \sin(n\theta)).
+\end{equation}
+which with the boundary condition gives us that $a_0=0$, $a_1=1$ and $a_n=b_n=0$ for $n>1$. So the solution is given by
+\begin{equation}
+    u(r,\theta)= r \cos\theta=x.
+\end{equation}
+ Now we will compare it with the solution obtained using the method of fundamental solutions with Bayesian inference. The fundamental solution of the Laplace equation in 2D is given by
+\begin{equation}
+    G(\vec{x}, \vec{x}_s) = -\frac{1}{2\pi} \log |\vec{x}-\vec{x}_s|
+\end{equation}
+where $\vec{x}_s$ is the source position. As an example, we choose 10 source points uniformly distributed on a circle of radius 2.0 as initial source positions. We choose the covariances of the prior, the measurement noise and the position uncertainty to be $\mathbf{\Sigma}_a = \sigma_a^2 \mathbf{I}$, $\mathbf{\Sigma} = \sigma^2 \mathbf{I}$ and $\mathbf{\Sigma}_x = \sigma_x^2 \mathbf{I}$ with $\sigma_a=1$, $\sigma=0.05$ and $\sigma_x=0.01$. The physical interpretation of our choices of covariances for this example is that we are assuming that the sensors have the same noise level and that the uncertainty in the position is the same for all directions and is the same for every boundary point. Our choice of $\sigma_a$ in this case not only limits the magnitude of the coefficients but also indirectly limits the source distances to the boundary.
+
+
+
+We then solve it with the initial source positions and with the optimised source positions by maximizing the evidence for 100 boundary measurements. The results are shown in the figures \ref{fig: laplace_optimised} and \ref{fig: laplace_not_optimised}. We can see that both solutions are quite good. However, optimising the source positions make the variance near the boundary more similar to the variance in the interior, while with the initial source positions the variance (diagonal elements of $\mathbf{\Sigma}_u$) is  larger near the boundary than in the interior. Maximising the evidence for the source positions also drags some of the source points to the same locations. This shows that some of the source points were actually irrelevant and the number of sources could be reduced without losing much accuracy.
+\begin{figure}
+    \centering
+    \includegraphics[width=0.9\textwidth]{images/laplace_reconstructed_fields_optimized.pdf}
+    \caption{Solution of the Laplace equation using method of Fundamental solutions with Bayesian inference using 10 source points with optimised source positions. The mean solution follows the analytical solution with 1.6\% of relative error and the uncertainty is quite small. Observe also that some of the source points are dragged to the points that maximize the evidence, revealing that some source points were actually irrelevant and the number of sources could be reduced without losing much accuracy.}
+    \label{fig: laplace_optimised}
+\end{figure}
+
+\begin{figure}
+    \centering
+    \includegraphics[width=0.9\textwidth]{images/laplace_reconstructed_fields_initial.pdf}
+    \caption{Solution of the Laplace equation using method of Fundamental solutions with Bayesian inference using 10 source points with initial source positions. The mean solution has a relative error of 1.55\% compared with the analytical solution and the uncertainty near the boundary is larger than in the interior.}
+    \label{fig: laplace_not_optimised}
+\end{figure}
+ \subsection{Elastostatics}
+ Now we proceed to test the method on more complex problems. We will assume linear and isotropic elasticity, so the governing equations are given by Navier's equation and it is given by
+
+\begin{equation} \label{eqn:navier-constitutive}
+    \nabla \cdot \vec \sigma(\vec x) + \vec f(\vec x) = \vec 0, \quad \text{where} \quad \vec \sigma =  \lambda \mathrm{tr}(\nabla \vec u)  \mathbf I + \mu(\nabla \vec u +\nabla \vec u^T),
+\end{equation}
+The fundamental solution of this vector equation is given by the Green tensor $U$ with $U$ satisfying
+\begin{equation}
+    \vec u (\vec x)=\int \vec U(\vec x- \vec x')f(\vec{x}') dA',
+\end{equation}
+with $\vec U$ satisfying the governing equation
+\begin{equation} \label{eqn:governing-delta}
+    (\lambda+\mu) \frac{\partial^2 U_{ki}}{\partial x_j \partial x_k}(\vec x) + \mu  \frac{\partial^2 U_{ji}}{\partial x_k \partial x_k}(\vec x) = -\delta(\vec x)\delta_{ij}.
+\end{equation}
+Physically, the Green's matrix $U_{ij}(\vec x- \vec x')$ represents the displacement in the $j$ direction at $\vec x = (x,y)$ due to a bulk point force in the $i$ direction at $\vec x'$.
+
+The solution for plane strain, in two spatial dimensions, to the above system \cite{appsol} is given by \cite[Equation (7)]{marin2004method} and \cite[Equation (6.24)]{wang2019methods}, up to an overall sign fixed by our convention \eqref{eqn:governing-delta}:
+\begin{equation} \label{eqn:displacement-MFS-2D}
+  U_{ij}(\vec x) = \frac{1}{8 \pi \mu(1-\nu)}\left[ -(3-4\nu)\log(r) \delta_{ij} + \frac{x_i x_j}{r^2}\right],
+\end{equation}
+where $\nu=\frac{\lambda}{2(\lambda+\mu)}$ is the Poisson ratio for plane strain and $r=\sqrt{x^2+y^2}$.
+
+The strategy of the method of fundamental solutions is to approximate the displacement $\vec u$, which satisfies the Navier equation, by a combination of $N$ sources placed outside the closure $\bar \Omega$ of the domain. Denote the source positions as $\vec x_n$, so that
+\begin{equation}\label{eq:uN}
+    \vec u(\vec x)= \sum_{n=1}^N \mathbf{U}(\vec x-\vec x_n) \vec{a}_n .
+\end{equation}
+
+To obtain the traction we substitute \eqref{eq:uN} into the constitutive equation \eqref{eqn:navier-constitutive}${}_2$ to obtain 
+\begin{align}
+& \sigma_{ij}(\vec x) = \sum_{\ell n} \Pi_{\ell i j}(\vec x - \vec x_n)\,a_{\ell n}, \qquad \text{where}
+\\
+& \Pi_{\ell i j}(\mathbf x)
+= -\frac{1}{2\pi(\lambda+2\mu)\,r^2}\left[
+    \mu\big(x_j\delta_{\ell i}+x_i\delta_{\ell j}-x_\ell\delta_{ij}\big)
+    +2(\lambda+\mu)\frac{x_\ell x_i x_j}{r^2}
+\right].
+\end{align}
+
+The traction $\vec \tau(\vec x)$ at a point $\vec x$ of the surface is then given by 
+\[
+\tau_i(\vec x) = \sum_{j}\sigma_{ij}(\vec x) n_j(\vec x) = \sum_{\ell j n} \Pi_{\ell  i j}(\vec x - \vec x_n) a_{\ell n} n_j(\vec x),
+\]
+where $\vec n$ is the outward unit normal at $\vec x$. From this we define the matrix 
+\begin{equation} \label{eq:tauN}
+T_{i\ell}(\vec x, \vec x_n) = \sum_{j}\Pi_{\ell i j}(\vec x - \vec x_n) n_j(\vec x), 
+\quad \text{such that} \quad 
+\vec \tau(\vec x) = \sum_{n} \mathbf T(\vec x, \vec x_n) \vec a_n.     
+\end{equation}
+
+Observe that to perform traction boundary conditions we need to also compute the normal vector at the boundary, which is simple if it is not random but if we have uncertainty in the position it will result in an uncertainty in the normal vector. So we need to adapt the method to also take it into account. The first step is to relate the normal vector to the boundary points. Suppose the boundary is sampled at consecutive points $\vec x_1, \vec x_2, \ldots$, ordered anticlockwise. The (unnormalized) tangent vector at $\vec x_j$ is approximately given by the difference between the neighbouring points,
+\begin{equation}
+    \vec t_j = \vec x_{j+1} - \vec x_{j-1} = \mathbf{L}_j \vec{x},
+\end{equation}
+where $\mathbf{L}_j$ is the matrix that selects and subtracts the appropriate coordinates from the vector $\vec x$ of all boundary points (one-sided differences are used at the ends of an open boundary). The outward unit normal is then
+\begin{equation}
+    \vec n_j = \mathbf{R}\,\frac{\vec t_j}{|\vec t_j|}, \qquad \mathbf{R} = \begin{bmatrix} 0 & 1\\ -1 & 0\end{bmatrix},
+\end{equation}
+where $\mathbf{R}$ rotates the tangent by $-\pi/2$. The normal is a nonlinear function of the boundary points only through the normalization. Linearizing around the mean boundary, with $\bar{\vec t}_j = \mathbf{L}_j \vec\mu_x$ and $\hat{\vec t}_j = \bar{\vec t}_j/|\bar{\vec t}_j|$, and using $\frac{\partial}{\partial \vec t}\left(\frac{\vec t}{|\vec t|}\right) = \frac{1}{|\vec t|}\left(\mathbf{I} - \hat{\vec t}\,\hat{\vec t}^T\right)$, we obtain
+\begin{equation}
+    \delta \vec n_j \approx \frac{1}{|\bar{\vec t}_j|}\,\mathbf{R}\left(\mathbf{I} - \hat{\vec t}_j\hat{\vec t}_j^T\right)\mathbf{L}_j\, \delta\vec x , \label{eq:normal_linearization}
+\end{equation}
+so, to first order, the normal is a linear function of the boundary perturbation $\delta \vec x$, with cross covariances
+\begin{equation}
+    E[\delta\vec n_j \,\delta \vec n_k^T] = \frac{1}{|\bar{\vec t}_j||\bar{\vec t}_k|}\, \mathbf{R}\left(\mathbf{I} - \hat{\vec t}_j\hat{\vec t}_j^T\right)\mathbf{L}_j \,\mathbf{\Sigma}_x\, \mathbf{L}_k^T \left(\mathbf{I} - \hat{\vec t}_k\hat{\vec t}_k^T\right)\mathbf{R}^T.
+\end{equation}
+For traction boundary conditions the rows of $\mathbf{M}$ are built from $\mathbf{T}(\vec x_j, \vec x_n)$ in \eqref{eq:tauN}, which depends on the boundary points both through the kernel $\Pi$ and through the normal. The boundary derivatives $\mathbf M_k$ that enter $\mathbf{C}_x$ in \eqref{eq:Cx} and the variational updates of Section~\ref{sec:vbem} therefore pick up two contributions,
+\begin{equation}
+    \frac{\partial T_{i\ell}}{\partial x_k}(\vec x_j, \vec x_n) = \sum_m \frac{\partial \Pi_{\ell i m}}{\partial x_k}(\vec x_j - \vec x_n)\, n_m(\vec x_j) + \sum_m \Pi_{\ell i m}(\vec x_j - \vec x_n)\, \frac{\partial n_m}{\partial x_k}(\vec x_j),
+\end{equation}
+where $\partial n_m/\partial x_k$ is read off from the linearization \eqref{eq:normal_linearization}. With these derivatives in hand, traction data with an uncertain boundary reduce exactly to the framework of Sections \ref{sec:random_boundary} and \ref{sec:vbem}.
+
+\appendix
+
+\section{Multivariate Gaussian identities} \label{app:identities}
+We collect the elementary identities used throughout the paper. First, completing the square, and the standard Gaussian integral:
+\begin{align}
+    & \exp\left( -\frac{1}{2} (\vec{x}- \vec{\mu})^T \mathbf{\Sigma}^{-1} (\vec{x}-\vec{\mu}) \right)= \exp\left(-\frac{1}{2}(\vec{x}^T \mathbf{\Sigma}^{-1} \vec{x} -2 \vec{x}^T \mathbf{\Sigma}^{-1} \vec{\mu} + \vec{\mu}^T \mathbf{\Sigma}^{-1} \vec{\mu})\right) \nonumber\\&\propto \exp\left(-\frac{1}{2}(\vec{x}^T \mathbf{\Sigma}^{-1} \vec{x} -2 \vec{x}^T \mathbf{\Sigma}^{-1} \vec{\mu})\right) \label{eq:complete_square}\\
+    & \int \exp\left(-\frac{1}{2}\vec{x}^T \mathbf{\Sigma}^{-1} \vec{x} + \vec{b}^T \vec{x}\right) d\vec{x} = (2\pi)^{n/2} |\mathbf{\Sigma}|^{1/2} \exp\left(\frac{1}{2}\vec{b}^T \mathbf{\Sigma} \vec{b} \right) \label{eq:gaussian_integral}
+    \end{align}
+
+Next, the expectations of quadratic forms quoted in \eqref{eq:quad_expectations}. Let $\vec w$ be a random vector with mean $\vec m$ and covariance $\mathbf V$, and let $\mathbf A$ be a constant symmetric matrix and $\vec c$ a constant vector. Writing $\vec w = \vec m + (\vec w - \vec m)$, expanding, and using $E[\vec w - \vec m] = \vec 0$ together with the cyclic property of the trace,
+\begin{equation}
+    E\big[(\vec w-\vec m)^T\mathbf A(\vec w-\vec m)\big] = E\big[\operatorname{tr}\big(\mathbf A(\vec w-\vec m)(\vec w-\vec m)^T\big)\big] = \operatorname{tr}(\mathbf A\mathbf V),
+\end{equation}
+so that
+\begin{equation}
+    E\big[\vec w^T \mathbf A\, \vec w\big] = \vec m^T\mathbf A\,\vec m + \operatorname{tr}(\mathbf A \mathbf V), \qquad
+    E\big[(\vec c - \vec w)^T \mathbf A\, (\vec c - \vec w)\big] = (\vec c - \vec m)^T\mathbf A\,(\vec c - \vec m) + \operatorname{tr}(\mathbf A \mathbf V),
+\end{equation}
+the second following from the first by replacing $\vec w$ with $\vec c - \vec w$, which has mean $\vec c - \vec m$ and the same covariance. These identities hold for any distribution with finite second moments, Gaussian or not.
+
+Finally, the KL divergence between two Gaussians $q = \mathcal N(\vec\mu_1, \mathbf S_1)$ and $p = \mathcal N(\vec\mu_0, \mathbf S_0)$ in dimension $n$. By definition $D_{KL}(q\,\|\,p) = E_q[\log q(\vec w)] - E_q[\log p(\vec w)]$, and both expectations are of quadratic forms, so the identities above evaluate them:
+\begin{align}
+    &E_q[\log q(\vec w)] = -\frac{1}{2}\operatorname{tr}(\mathbf S_1^{-1}\mathbf S_1) - \frac{1}{2}\log|2\pi \mathbf S_1| = -\frac{n}{2} - \frac{1}{2}\log|2\pi \mathbf S_1|,\\
+    &E_q[\log p(\vec w)] = -\frac{1}{2}\left[(\vec\mu_1-\vec\mu_0)^T\mathbf S_0^{-1}(\vec\mu_1-\vec\mu_0) + \operatorname{tr}(\mathbf S_0^{-1}\mathbf S_1)\right] - \frac{1}{2}\log|2\pi \mathbf S_0|,
+\end{align}
+and subtracting gives
+\begin{equation}
+    D_{KL}(q\,\|\,p) = \frac12\left[\operatorname{tr}(\mathbf S_0^{-1}\mathbf S_1) + (\vec\mu_1-\vec\mu_0)^T\mathbf S_0^{-1}(\vec\mu_1-\vec\mu_0) - n + \log\frac{|\mathbf S_0|}{|\mathbf S_1|}\right],
+\end{equation}
+which for $\vec\mu_0 = \vec 0$ is the formula \eqref{eq:gaussian_kl} used to monitor the bound.
+
+\section{Marginals and conditionals of a joint Gaussian} \label{app:conditioning}
+Let the pair $(\vec a, \vec g)$ be jointly Gaussian with zero mean and covariance
+\begin{equation}
+    \mathbf{\Sigma}_{\text{joint}} = \begin{bmatrix} \mathbf{\Sigma}_{aa} & \mathbf{\Sigma}_{ag}\\ \mathbf{\Sigma}_{ga} & \mathbf{\Sigma}_{gg}\end{bmatrix}, \qquad \mathbf{\Sigma}_{ga} = \mathbf{\Sigma}_{ag}^T.
+\end{equation}
+Define the Schur complement of the block $\mathbf{\Sigma}_{gg}$,
+\begin{equation}
+    \mathbf S := \mathbf{\Sigma}_{aa} - \mathbf{\Sigma}_{ag}\mathbf{\Sigma}_{gg}^{-1}\mathbf{\Sigma}_{ga}.
+\end{equation}
+Direct block multiplication verifies the factorization
+\begin{equation}
+    \mathbf{\Sigma}_{\text{joint}} = \mathbf U \begin{bmatrix} \mathbf S & \mathbf 0\\ \mathbf 0 & \mathbf{\Sigma}_{gg}\end{bmatrix} \mathbf U^T, \qquad
+    \mathbf U = \begin{bmatrix} \mathbf I & \mathbf{\Sigma}_{ag}\mathbf{\Sigma}_{gg}^{-1}\\ \mathbf 0 & \mathbf I\end{bmatrix}, \qquad
+    \mathbf U^{-1} = \begin{bmatrix} \mathbf I & -\mathbf{\Sigma}_{ag}\mathbf{\Sigma}_{gg}^{-1}\\ \mathbf 0 & \mathbf I\end{bmatrix}, \label{eq:block_factorization}
+\end{equation}
+from which two consequences follow at once. Taking determinants, since the triangular factor $\mathbf U$ has unit diagonal,
+\begin{equation}
+    |\mathbf{\Sigma}_{\text{joint}}| = |\mathbf S|\,|\mathbf{\Sigma}_{gg}|,
+\end{equation}
+and inverting the factorization, the joint quadratic form splits as
+\begin{equation}
+    \begin{bmatrix}\vec a\\ \vec g\end{bmatrix}^T \mathbf{\Sigma}_{\text{joint}}^{-1}\begin{bmatrix}\vec a\\ \vec g\end{bmatrix}
+    = \left(\mathbf U^{-1}\begin{bmatrix}\vec a\\ \vec g\end{bmatrix}\right)^T \begin{bmatrix} \mathbf S^{-1} & \mathbf 0\\ \mathbf 0 & \mathbf{\Sigma}_{gg}^{-1}\end{bmatrix} \left(\mathbf U^{-1}\begin{bmatrix}\vec a\\ \vec g\end{bmatrix}\right)
+    = \big(\vec a - \mathbf{\Sigma}_{ag}\mathbf{\Sigma}_{gg}^{-1}\vec g\big)^T \mathbf S^{-1}\big(\vec a - \mathbf{\Sigma}_{ag}\mathbf{\Sigma}_{gg}^{-1}\vec g\big) + \vec g^T\mathbf{\Sigma}_{gg}^{-1}\vec g.
+\end{equation}
+Together with the determinant identity, which splits the normalization constant in the same way, the joint density factorizes into a product of two normalized Gaussians,
+\begin{equation}
+    p(\vec a, \vec g) = \underbrace{\mathcal N\big(\vec a\,\big|\,\mathbf{\Sigma}_{ag}\mathbf{\Sigma}_{gg}^{-1}\vec g,\; \mathbf S\big)}_{=\,p(\vec a|\vec g)}\;\times\;\underbrace{\mathcal N\big(\vec g\,\big|\,\vec 0,\; \mathbf{\Sigma}_{gg}\big)}_{=\,p(\vec g)}.
+\end{equation}
+Integrating over $\vec a$ shows that the second factor is the marginal of $\vec g$; dividing by it shows that the first factor is the conditional of $\vec a$ given $\vec g$. This proves \eqref{eq:conditioning}.
+
+\section{The KL divergence and the best Gaussian approximation by moment matching} \label{variational_inference}
+If we want to approximate a distribution $p$ with another distribution $q$ we can use the KL divergence, which is defined as
+\begin{equation}
+    D_{KL}(p||q) = \int p(\vec{a}) \log \frac{p(\vec{a})}{q(\vec{a})} d\vec{a}
+\end{equation}
+The KL divergence is a measure of how different two distributions are: it is nonnegative, and zero if and only if the two distributions coincide. This is Gibbs' inequality, and it follows from the elementary bound $\log t \le t - 1$ for all $t>0$, with equality only at $t=1$:
+\begin{equation}
+    -D_{KL}(p||q) = \int p(\vec a) \log \frac{q(\vec a)}{p(\vec a)}\, d\vec a \;\le\; \int p(\vec a)\left(\frac{q(\vec a)}{p(\vec a)} - 1\right) d\vec a = \int q(\vec a)\, d\vec a - \int p(\vec a)\, d\vec a = 0,
+\end{equation}
+with equality if and only if $q = p$ almost everywhere. If we minimize the KL divergence with respect to $q$, we can therefore find the best approximation to $p$ within a chosen family. Note that here we minimize the forward divergence $D_{KL}(p||q)$; this is the moment projection used, for example, in expectation propagation \cite{minka2001expectation}, and it is distinct from the variational inference of Section~\ref{sec:vbem}, which minimizes the reverse divergence $D_{KL}(q||p)$ and does not, in general, match the moments of $p$. Observe that expanding the above we obtain that
+
+\begin{equation}
+    D_{KL}(p||q) = \int p(\vec{a}) \log p(\vec{a}) d\vec{a} - \int p(\vec{a}) \log q(\vec{a}) d\vec{a}
+\end{equation}
+Notice that the first term only depends on the true distribution $p$ which we want to approximate, so we can ignore it and maximize the second term. Consider so the following functional that we want to maximize
+
+\begin{equation}
+S= \int p(\vec{a}) \log q(\vec{a}) d\vec{a}.
+    \end{equation}
+For the purpose of our problem we will approximate the posterior distribution of $\vec{a}$ with a multivariate Gaussian distribution
+\begin{equation} 
+q(\vec{a}) = \frac{1}{(2\pi)^{n/2} |\mathbf{\Sigma}|^{1/2}} \exp\left(-\frac{1}{2}(\vec{a}-\vec{\mu})^T \mathbf{\Sigma}^{-1} (\vec{a}-\vec{\mu})\right)
+\end{equation}
+that in component form can be written as
+\begin{equation}
+    q(\vec{a}) = \frac{1}{(2\pi)^{n/2} |\mathbf{\Sigma}|^{1/2}} \exp\left(-\frac{1}{2}\sum_{i,j} (a_i-\mu_i) \Sigma^{-1}_{ij} (a_j-\mu_j)\right)
+\end{equation}
+We can then find the optimal mean and covariance matrix by extremizing the functional $S$.
+\begin{equation}
+\delta S = \int p(\vec{a}) \delta \log q(\vec{a}) d\vec{a} = 0
+\end{equation}
+which gives us that, doing the variation component-wise with respect to $\mu_i$ and $\Sigma^{-1}_{ij}$, we have that
+\begin{align}
+    &\delta S = \int p(\vec{a}) \left( \frac{\partial}{\partial \mu_i} \log q(\vec{a}) \delta{\mu_i} + \frac{\partial}{\partial \Sigma^{-1}_{ij}} \log q(\vec{a}) \delta{\Sigma^{-1}_{ij}} \right) d\vec{a} = 0
+\end{align}
+since this must hold for any variation of $\mu_i$ and $\Sigma^{-1}_{ij}$ we have that
+\begin{equation}
+     \int p(\vec{a})\frac{\partial}{\partial \mu_i} \log q(\vec{a}) d\vec{a} = 0 \quad \text{and} \quad \int p(\vec{a})\frac{\partial}{\partial \Sigma^{-1}_{ij}} \log q(\vec{a}) d \vec{a} = 0.
+\end{equation}
+Observe that the logarithm of the multivariate Gaussian distribution is given by
+\begin{equation}
+    \log q(\vec{a}) = -\frac{1}{2}\sum_{i,j} (a_i-\mu_i) \Sigma^{-1}_{ij} (a_j-\mu_j) - \frac{1}{2}\log |\mathbf{\Sigma}| - \frac{n}{2}\log 2\pi
+\end{equation}
+Calculating the derivatives we have that
+\begin{equation}
+    \frac{\partial}{\partial \mu_i} \log q(\vec{a}) = \sum_j \Sigma^{-1}_{ij} (a_j-\mu_j)
+\end{equation}
+Since the matrix $\mathbf{\Sigma}^{-1}$ is invertible, the condition $\int p(\vec{a}) \sum_j \Sigma^{-1}_{ij} (a_j-\mu_j) d\vec{a} = 0$ for all $i$ implies
+\begin{equation}
+    \int p(\vec{a}) (a_j-\mu_j) d\vec{a} = 0 \quad \Rightarrow \quad \mu_j = \int p(\vec{a}) a_j d\vec{a} \Rightarrow \vec{\mu} = \int \vec{a} p(\vec{a})  d\vec{a}
+\end{equation}
+which means that the optimal mean of the approximating Gaussian distribution is given by the mean of the true distribution $p$. Now we can calculate the derivative with respect to $\Sigma^{-1}_{ij}$, which gives us that
+\begin{equation}
+    \frac{\partial}{\partial \Sigma^{-1}_{ij}} \log q(\vec{a}) = -\frac{1}{2} (a_i-\mu_i) (a_j-\mu_j) - \frac{1}{2} \frac{\partial}{\partial \Sigma^{-1}_{ij}} \log |\mathbf{\Sigma}|
+\end{equation}
+
+Observe that 
+\begin{equation}
+    \frac{\partial}{\partial \Sigma^{-1}_{ij}} \log |\mathbf{\Sigma}| = \frac{\partial}{\partial \Sigma^{-1}_{ij}} \log |\mathbf{\Sigma}^{-1}|^{-1} = -\frac{\partial}{\partial \Sigma^{-1}_{ij}} \log |\mathbf{\Sigma}^{-1}| = -\Sigma_{ij}
+\end{equation}
+where we used the identity $\frac{\partial}{\partial A_{ij}} \log |A| = A^{-1}_{ji}$ for any invertible matrix $A$. So we have that
+\begin{equation}
+    \frac{\partial}{\partial \Sigma^{-1}_{ij}} \log q(\vec{a}) = -\frac{1}{2} (a_i-\mu_i) (a_j-\mu_j) + \frac{1}{2} \Sigma_{ij}
+\end{equation}
+so imposing $\int p(\vec{a}) \frac{\partial}{\partial \Sigma^{-1}_{ij}} \log q(\vec{a}) d\vec{a} = 0$ gives us that
+\begin{equation}
+    \Sigma_{ij} = \int p(\vec{a}) (a_i-\mu_i) (a_j-\mu_j) d\vec{a} \quad \Rightarrow \quad \mathbf{\Sigma} = \int (\vec{a}-\vec{\mu})(\vec{a}-\vec{\mu})^T p(\vec{a}) d\vec{a} 
+\end{equation}
+which means that the optimal covariance matrix of the approximating Gaussian distribution is given by the covariance matrix of the true distribution $p$. So we have that the Gaussian that best approximates a distribution $p$, in the sense of the forward KL divergence, is the one with the same mean and covariance matrix as $p$.
+\printbibliography
+\end{document}
