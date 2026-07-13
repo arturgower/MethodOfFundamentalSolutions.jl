@@ -37,3 +37,21 @@ function interior_points_along_coordinate(points; offset_percent = 0.1,
     return interior_points
 end
 
+
+# function predict_field(fsol::FundamentalSolution, bd::BoundaryData; normal_vec = [0.0,1.0], yres = 35, xres = 15)
+
+#     x_vec, inds = points_in_shape(bd; yres = yres, xres = xres)
+#     xs = x_vec[inds]
+
+#     fs = [
+#         field(TractionType(), fsol, x, normal_vec) 
+#     for x in xs];
+
+#     field_mat = [[0.0, 0.0] for x in x_vec]
+#     field_mat[inds] = fs;
+#     field_predict = FieldResult(x_vec, field_mat[:]);
+
+#     return field_predict
+# end
+
+# f1 = predict_field(fsol1, bd1; normal_vec = [0.0,1.0], yres = yres, xres = xres);

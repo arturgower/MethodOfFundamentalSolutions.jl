@@ -92,7 +92,7 @@ end
 system_matrix(sim::Simulation) = system_matrix(sim.source_positions, sim.medium, sim.boundary_data)
 
 function system_matrix(
-    source_positions::AbstractVector{<:SVector{Dim}}, 
+    source_pos::AbstractVector{<:SVector{Dim}}, 
     medium::P, 
     bd::BoundaryData
 ) where {Dim, P<:PhysicalMedium{Dim}}
@@ -117,10 +117,12 @@ function system_matrix(
             # 4. Call greens. Now r_vec and normal_vec share the exact same type!
             greens(bd.fieldtype, medium, r_vec, normal_vec)    
         end
-        for i in eachindex(points), x in source_positions
+        for i in eachindex(points), x in source_pos
     ]
 
-    return Matrix(mortar(Ms))
+    Ms = (typeof(Ms[1]) <: AbstractMatrix) ? Matrix(mortar(Ms)) : Ms
+    
+    return Ms
 end
 
 

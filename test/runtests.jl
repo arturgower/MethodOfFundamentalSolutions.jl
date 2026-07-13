@@ -1,5 +1,9 @@
 using MethodOfFundamentalSolutions
 using Test, Statistics, LinearAlgebra, Distributions, StaticArrays
+using SpecialFunctions
+using Random
+
+const MFS = MethodOfFundamentalSolutions
 
 include("boundarydata_test.jl")
 include("benchmarks_test.jl")

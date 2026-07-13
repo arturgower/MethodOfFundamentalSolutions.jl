@@ -32,7 +32,7 @@ bd = BoundaryData(TractionType();
     interior_points = interior_points
 )
 
-source_pos=source_positions(bd; relative_source_distance = 1.0)
+source_pos = source_positions(bd; relative_source_distance = 1.0)
 
 # Solve
 solver = TikhonovSolver(λ=λ, tolerance = tolerance)

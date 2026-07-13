@@ -1,14 +1,3 @@
-using LinearAlgebra
-using Test
-using Statistics
-using Random
-using Distributions
-using SpecialFunctions
-using StaticArrays
-using MethodOfFundamentalSolutions
-
-const MFS = MethodOfFundamentalSolutions
-
 # The evidence lower bound must never decrease, except across iterations where the model
 # itself changed (a source was pruned, or the boundary was re-centered).
 function elbo_is_monotone(vsol; tol = 1e-6)
@@ -21,6 +10,137 @@ end
 # All the tests below keep the geometry x fixed: update_geometry_flag = false (the default),
 # so the algorithm reduces to exact evidence maximization over the prior {αᵢ} and basis χ.
 @testset "Variational evidence maximization" begin
+
+
+# ==============================================================================
+# 0. Synthetic data for the Laplace equations, where the exact source positions are known. The variational solver must learn the source positions and converge to the exact solution.
+# ==============================================================================
+@testset "Laplace equation: circle" begin
+    medium = LaplaceMedium{2, Float64}()
+    Random.seed!(1234)
+
+    # Define the sources
+        r_source = 1.1
+        N_sources = 10
+        source_θs = LinRange(0, 2pi, N_sources + 1)[1:N_sources] + rand(N_sources) * 0.1
+        source_pos = [[r_source * cos(θ), r_source * sin(θ)] for θ in source_θs]
+        source_amps = -(0.2 .+ cos.(source_θs .* 2) .^2)
+
+    # Define the boundary data from sources
+        r = 1.0
+        N_points = 40;
+        points_θs = LinRange(0, 2pi, N_points + 1)[1:N_points]
+        points = [[r * cos(θ), r * sin(θ)] for θ in points_θs]
+        
+        FT = DirichletType()
+
+        field_true(x) = sum(source_amps[i] .* greens(FT, medium, x - source_pos[i]) for i in eachindex(source_pos))
+        
+        fields = field_true.(points)
+
+        bd = BoundaryData(FT;
+            boundary_points = points,
+            fields = fields
+        )
+
+    # Plot true solution    
+        # res = 30
+        # x_vec, inds = points_in_shape(bd; yres = res, xres = res)
+        # xs = x_vec[inds]
+
+        # fs = field_true.(xs)
+
+        # field_mat = [0.0 for x in x_vec]
+        # field_mat[inds] = fs;
+        # field_mat = [[f] for f in field_mat]
+        # field_predict = FieldResult(x_vec, field_mat[:]);
+
+        # using Plots
+        # plot(field_predict, 
+        #     c = :balance, 
+        #     # c = :inferno, 
+        #     # clims = clims, 
+        #     xlims = (-1.2,1.2), 
+        #     ylims = (-1.2,1.2),
+        #     aspect_ratio = 1.0
+        # )
+        # scatter!([p[1] for p in source_pos], [p[2] for p in source_pos], c = :red)
+    
+    # Solve problem by adding noise    
+        σ = 1e-3   # known measurement noise
+
+    solver = VariationalBayesianSolver(
+        optimise_source_positions_flag = true,
+        prior_variance = 1.0,
+        noise_variance = σ^2,
+        ard_threshold = 1e6,
+        max_iters = 150,
+        elbo_tol = 1e-9
+    )
+
+    @testset "built-in initial source positions" begin
+        # take the sources from a denser sampling of the boundary, so that there are
+        # more sources (and coefficients) than measurements
+        N_dense = 80
+        dense_θs = LinRange(0, 2pi, N_dense + 1)[1:N_dense]
+        sources = [[1.01 * cos(θ), 1.01 * sin(θ)] for θ in dense_θs]
+
+        sim = Simulation(medium, bd; solver = solver, source_positions = sources)
+        vsol = solve(sim)
+
+        # @test relative_prediction_error(vsol) < 0.05
+        # @test length(vsol.fsol.positions) < length(sources)   # ARD pruned sources
+        @test elbo_is_monotone(vsol)
+        @test 0.1 < vsol.misfit_ratio < 5.0
+    end
+
+    # @testset "sources everywhere and ARD" begin
+    #     sources = grid_source_positions(bd; n = 15, scale = 2.5, clearance = 1.0)
+    #     @test length(sources) > N_bd   # more sources than measurements
+
+    #     sim = Simulation(medium, bd; solver = solver, source_positions = sources)
+    #     vsol = solve(sim)
+
+    #     @test relative_prediction_error(vsol) < 0.05
+    #     @test length(vsol.fsol.positions) < length(sources)
+    #     @test elbo_is_monotone(vsol)
+    #     @test 0.1 < vsol.misfit_ratio < 5.0
+    # end
+
+    # @testset "learning the source positions" begin
+    #     N_small = 20
+    #     θsmall = LinRange(0, 2pi, N_small + 1)[1:N_small]
+    #     points_small = [[r * cos(θ), r * sin(θ)] for θ in θsmall]
+    #     fields_small = [[-ϕ(p[1], p[2]) + σ * (randn() + im * randn())] for p in points_small]
+    #     bd_small = BoundaryData(TractionType();
+    #         boundary_points = points_small,
+    #         fields = fields_small,
+    #         outward_normals = [[cos(θ), sin(θ)] for θ in θsmall],
+    #         interior_points = [[0.0, 0.0]]
+    #     )
+
+    #     n_src = 12
+    #     θsrc = LinRange(0, 2pi, n_src + 1)[1:n_src]
+    #     sources = [[2.5cos(θ), 2.5sin(θ)] for θ in θsrc]
+
+    #     solver_chi = VariationalBayesianSolver(
+    #         prior_variance = 1.0,
+    #         noise_variance = σ^2,
+    #         optimise_source_positions_flag = true,
+    #         source_position_iters = 3,
+    #         ard_prune_flag = false,
+    #         max_iters = 30,
+    #         elbo_tol = 1e-9
+    #     )
+    #     sim = Simulation(medium, bd_small; solver = solver_chi, source_positions = sources)
+    #     vsol = solve(sim)
+
+    #     @test relative_prediction_error(vsol) < 0.1
+    #     @test elbo_is_monotone(vsol)
+    # end
+
+
+end
 
 # ==============================================================================
 # 1. The analytic gradient of the expected misfit over the source positions χ

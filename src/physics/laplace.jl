@@ -6,23 +6,18 @@ struct LaplaceMedium{Dim,T} <: PhysicalMedium{Dim, 1} end
 
 function greens(
     field::DirichletType, 
-    medium::LaplaceMedium{2, T1},
-    x::SVector{2, T2}, 
-    outward_normal::SVector
-) where {T1, T2}
-    
-    # Calculate the purely real scalar value
-    val = -1 / (2π) * log(norm(x))
-    
-    # Return it wrapped in a 1x1 Static Matrix of type T2
-    return SMatrix{1, 1, T2}(val)
+    medium::LaplaceMedium{2},
+    x::AbstractVector,
+    outward_normal::AbstractVector = [0.0,0.0]
+)    
+    return -1 / (2π) * log(norm(x))
 end
 
 function greens_gradient(
     field::DirichletType, 
     medium::LaplaceMedium{2, T1}, 
     x::SVector{2, T2}, 
-    outward_normal::SVector
+    outward_normal::SVector{2, T2} = SVector{2, T2}(0.0, 0.0)
 ) where {T1, T2}
     
     r2 = x[1]^2 + x[2]^2 + 1e-12 
