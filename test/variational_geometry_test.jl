@@ -64,13 +64,12 @@ end
         medium = LaplaceMedium{2, Float64}()
         bd = BoundaryData(DirichletType();
             boundary_points = MvNormal(vcat(Vector.(x_nom)...), σx^2 * I(2n_bd)),
-            fields = [[gi] for gi in g],
+            fields = [MvNormal([gi], σ_noise^2 * I(1)) for gi in g],
             outward_normals = normals,
             interior_points = [[0.0, 0.0]]
         )
         solver = VariationalBayesianSolver(
             prior_variance = 10.0^2,
-            noise_variance = σ_noise^2,
             update_geometry_flag = true,
             ard_prune_flag = false,
             max_iters = max_iters,
@@ -214,13 +213,12 @@ end
 
         bd = BoundaryData(TractionType();
             boundary_points = MvNormal(vcat(Vector.(x_nom)...), σx^2 * I(2n_bd)),
-            fields = g,
+            fields = [MvNormal(gi, σ_noise_e^2 * I(2)) for gi in g],
             outward_normals = normals,
             interior_points = [[0.0, 0.0]]
         )
         solver = VariationalBayesianSolver(
             prior_variance = 10.0^2,
-            noise_variance = σ_noise_e^2,
             update_geometry_flag = true,
             ard_prune_flag = false,
             max_iters = 100,

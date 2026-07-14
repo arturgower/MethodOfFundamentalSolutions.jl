@@ -13,132 +13,183 @@ end
 
 
 # ==============================================================================
-# 0. Synthetic data for the Laplace equations, where the exact source positions are known. The variational solver must learn the source positions and converge to the exact solution.
+# 0. Synthetic data for the Laplace equation, where the exact source positions are
+#    known. Each source i has a Gaussian amplitude aᵢ ~ N(μᵢ, vᵢ); the field is linear
+#    in the amplitudes, so the boundary field is Gaussian with
+#        mean u(x) = Σᵢ μᵢ G(x - χᵢ)   and   variance Var u(x) = Σᵢ vᵢ G(x - χᵢ)².
+#    The variance of the measurements is carried by the boundary data alone, as a
+#    vector of `MvNormal`s, one per boundary point.
 # ==============================================================================
 @testset "Laplace equation: circle" begin
     medium = LaplaceMedium{2, Float64}()
     Random.seed!(1234)
+    FT = DirichletType()
 
-    # Define the sources
-        r_source = 1.1
-        N_sources = 10
-        source_θs = LinRange(0, 2pi, N_sources + 1)[1:N_sources] + rand(N_sources) * 0.1
-        source_pos = [[r_source * cos(θ), r_source * sin(θ)] for θ in source_θs]
-        source_amps = -(0.2 .+ cos.(source_θs .* 2) .^2)
-
-    # Define the boundary data from sources
-        r = 1.0
-        N_points = 40;
-        points_θs = LinRange(0, 2pi, N_points + 1)[1:N_points]
-        points = [[r * cos(θ), r * sin(θ)] for θ in points_θs]
-        
-        FT = DirichletType()
-
-        field_true(x) = sum(source_amps[i] .* greens(FT, medium, x - source_pos[i]) for i in eachindex(source_pos))
-        
-        fields = field_true.(points)
-
-        bd = BoundaryData(FT;
-            boundary_points = points,
-            fields = fields
-        )
-
-    # Plot true solution    
-        # res = 30
-        # x_vec, inds = points_in_shape(bd; yres = res, xres = res)
-        # xs = x_vec[inds]
-
-        # fs = field_true.(xs)
-
-        # field_mat = [0.0 for x in x_vec]
-        # field_mat[inds] = fs;
-        # field_mat = [[f] for f in field_mat]
-        # field_predict = FieldResult(x_vec, field_mat[:]);
-
-        # using Plots
-        # plot(field_predict, 
-        #     c = :balance, 
-        #     # c = :inferno, 
-        #     # clims = clims, 
-        #     xlims = (-1.2,1.2), 
-        #     ylims = (-1.2,1.2),
-        #     aspect_ratio = 1.0
-        # )
-        # scatter!([p[1] for p in source_pos], [p[2] for p in source_pos], c = :red)
+    # The sources: positions, mean amplitudes, and a variance for each amplitude
+    r_source = 1.1
+    N_sources = 10
+    source_θs = LinRange(0, 2pi, N_sources + 1)[1:N_sources] + rand(N_sources) * 0.1
+    source_pos = [[r_source * cos(θ), r_source * sin(θ)] for θ in source_θs]
     
-    # Solve problem by adding noise    
-        σ = 1e-3   # known measurement noise
+    # want all amps to same strength, as then they can be learned.
+    signs = [ θ > pi ? 1.0 : -1.0  for θ in source_θs]
+    source_amps = (-1.0) .^ signs
+    source_vars = (0.05 .* source_amps) .^ 2   # a 5% standard deviation per source
 
-    solver = VariationalBayesianSolver(
-        optimise_source_positions_flag = true,
-        prior_variance = 1.0,
-        noise_variance = σ^2,
-        ard_threshold = 1e6,
-        max_iters = 150,
-        elbo_tol = 1e-9
+    # The boundary points
+    r = 1.0
+    N_points = 40
+    points_θs = LinRange(0, 2pi, N_points + 1)[1:N_points]
+    points = [[r * cos(θ), r * sin(θ)] for θ in points_θs]
+
+    # 1) evaluate the field of the combined sources: its mean and its variance
+    field_mean(x) = sum(source_amps[i] * greens(FT, medium, x - source_pos[i]) for i in eachindex(source_pos))
+    field_var(x) = sum(source_vars[i] * greens(FT, medium, x - source_pos[i])^2 for i in eachindex(source_pos))
+
+    bd = BoundaryData(FT;
+        boundary_points = points,
+        fields = [MvNormal([field_mean(x)], field_var(x) * I(1)) for x in points]
     )
 
-    @testset "built-in initial source positions" begin
-        # take the sources from a denser sampling of the boundary, so that there are
-        # more sources (and coefficients) than measurements
-        N_dense = 80
-        dense_θs = LinRange(0, 2pi, N_dense + 1)[1:N_dense]
-        sources = [[1.01 * cos(θ), 1.01 * sin(θ)] for θ in dense_θs]
+    M = system_matrix([SVector{2, Float64}(p) for p in source_pos], medium, bd)
+    Σ_induced = Symmetric(M * Diagonal(source_vars) * M' + 1e-9 * I)
+    bd_full = BoundaryData(FT;
+        boundary_points = points,
+        fields = MvNormal(field_mean.(points), Σ_induced)
+    )
 
-        sim = Simulation(medium, bd; solver = solver, source_positions = sources)
+    @test cov(bd_full.fields) ≈ Σ_induced
+
+    # using Plots
+    # plot(bd)
+
+    # 2) With the true source positions, and the true amplitude variances passed as the
+    #    priors, the solver must use exactly the specified variances of the sources and
+    #    return exactly the corresponding Gaussian posterior.
+    @testset "correct positions and priors: the specified variances are used exactly" begin
+        priors = [MvNormal([0.0], source_vars[i] * I(1)) for i in eachindex(source_vars)]
+        solver = VariationalBayesianSolver(
+            priors = priors,
+            learn_prior_flag = false,
+            ard_prune_flag = false,
+            max_iters = 1
+        )
+        sim = Simulation(medium, bd_full; solver = solver, source_positions = source_pos)
         vsol = solve(sim)
 
-        # @test relative_prediction_error(vsol) < 0.05
-        # @test length(vsol.fsol.positions) < length(sources)   # ARD pruned sources
-        @test elbo_is_monotone(vsol)
-        @test 0.1 < vsol.misfit_ratio < 5.0
+        # using Plots
+        # plot(vsol,bd)
+
+        # the prior variances of the sources are exactly those specified
+        @test 1 ./ vsol.prior_precisions ≈ source_vars rtol = 1e-12
+
+        # and the posterior is exactly the Gaussian posterior with those variances
+        M = system_matrix([SVector{2, Float64}(p) for p in source_pos], medium, bd_full)
+        invΣ = inv(Σ_induced)
+
+        Σ_exact = inv(Symmetric(M' * (invΣ * M) + Diagonal(1 ./ source_vars)))
+        μ_exact = Σ_exact * (M' * (invΣ * field_mean.(points)))
+        @test vsol.coefficients_mean ≈ μ_exact rtol = 1e-8
+        @test vsol.coefficients_covariance ≈ Σ_exact rtol = 1e-8
     end
 
-    # @testset "sources everywhere and ARD" begin
-    #     sources = grid_source_positions(bd; n = 15, scale = 2.5, clearance = 1.0)
-    #     @test length(sources) > N_bd   # more sources than measurements
+    # 2b) The field covariance induced by independent source amplitudes aᵢ ~ N(μᵢ, vᵢ) is the
+    #     FULL matrix Σ = M diag(v) Mᵀ (rank-deficient, so a small jitter makes it a proper
+    #     covariance). Fed as the measurement noise, with a weak prior so the data determine
+    #     the posterior, the coefficient posterior covariance recovers diag(vᵢ): the true
+    #     variances of the sources. (With only the diagonal of Σ, as in test 2, it is close
+    #     but not exact; the full covariance makes it exact.)
+    @testset "full induced covariance: posterior variance matches the source variances" begin
+        M = system_matrix([SVector{2, Float64}(p) for p in source_pos], medium, bd_full)
+        Σ_induced = Symmetric(M * Diagonal(source_vars) * M' + 1e-9 * I)
+        bd_full = BoundaryData(FT;
+            boundary_points = points,
+            fields = MvNormal(field_mean.(points), Σ_induced)
+        )
 
-    #     sim = Simulation(medium, bd; solver = solver, source_positions = sources)
-    #     vsol = solve(sim)
+        solver = VariationalBayesianSolver(
+            prior_variance = 1e8,        # weak prior: the posterior variance is set by the data
+            learn_prior_flag = false,
+            ard_prune_flag = false,
+            max_iters = 1
+        )
+        sim = Simulation(medium, bd_full; solver = solver, source_positions = source_pos)
+        vsol = solve(sim)
+        
+        @test diag(vsol.coefficients_covariance) ≈ source_vars rtol = 1e-5
 
-    #     @test relative_prediction_error(vsol) < 0.05
-    #     @test length(vsol.fsol.positions) < length(sources)
-    #     @test elbo_is_monotone(vsol)
-    #     @test 0.1 < vsol.misfit_ratio < 5.0
-    # end
+        # posterior variance is diagonal
+        @test norm(vsol.coefficients_covariance - diagm(diag(vsol.coefficients_covariance))) / norm(vsol.coefficients_covariance) < 1e-5
+        
+        # if we learn the prior from the data, the posterior variance approximately recover the true source variances
+        solver = VariationalBayesianSolver(
+            prior_variance = 1e0,        # weak prior: the posterior variance is set by the data
+            learn_prior_flag = true,
+            ard_prune_flag = false,
+            max_iters = 100
+        )
+        sim = Simulation(medium, bd_full; solver = solver, source_positions = source_pos)
+        vsol = solve(sim)
+        
+        @test diag(vsol.coefficients_covariance) ≈ source_vars rtol = 1e-2
+        @test norm(vsol.coefficients_covariance - diagm(diag(vsol.coefficients_covariance))) / norm(vsol.coefficients_covariance) < 1e-5
 
-    # @testset "learning the source positions" begin
-    #     N_small = 20
-    #     θsmall = LinRange(0, 2pi, N_small + 1)[1:N_small]
-    #     points_small = [[r * cos(θ), r * sin(θ)] for θ in θsmall]
-    #     fields_small = [[-ϕ(p[1], p[2]) + σ * (randn() + im * randn())] for p in points_small]
-    #     bd_small = BoundaryData(TractionType();
-    #         boundary_points = points_small,
-    #         fields = fields_small,
-    #         outward_normals = [[cos(θ), sin(θ)] for θ in θsmall],
-    #         interior_points = [[0.0, 0.0]]
-    #     )
+    end
 
-    #     n_src = 12
-    #     θsrc = LinRange(0, 2pi, n_src + 1)[1:n_src]
-    #     sources = [[2.5cos(θ), 2.5sin(θ)] for θ in θsrc]
+    # 3) Misspecified priors: evidence maximization re-learns the prior, so the
+    #    posterior mean still recovers the amplitudes exactly (the data are the exact
+    #    mean field of the sources).
+    @testset "misspecified priors still recover the exact solution" begin
+        priors_wrong = [MvNormal([0.0], 1e3 * source_vars[i] * I(1)) for i in eachindex(source_vars)]
+        solver = VariationalBayesianSolver(
+            priors = priors_wrong,
+            ard_prune_flag = false,
+            max_iters = 200,
+            elbo_tol = 1e-10
+        )
+        sim = Simulation(medium, bd_full; solver = solver, source_positions = source_pos)
+        vsol = solve(sim)
 
-    #     solver_chi = VariationalBayesianSolver(
-    #         prior_variance = 1.0,
-    #         noise_variance = σ^2,
-    #         optimise_source_positions_flag = true,
-    #         source_position_iters = 3,
-    #         ard_prune_flag = false,
-    #         max_iters = 30,
-    #         elbo_tol = 1e-9
-    #     )
-    #     sim = Simulation(medium, bd_small; solver = solver_chi, source_positions = sources)
-    #     vsol = solve(sim)
+        # recovery well below the 5% standard deviation of the amplitudes
+        @test vsol.coefficients_mean ≈ source_amps rtol = 2e-2
+        pred = [field(FT, vsol, x)[1] for x in points]
+        @test pred ≈ field_mean.(points) rtol = 2e-2
+        @test elbo_is_monotone(vsol)
+    end
 
-    #     @test relative_prediction_error(vsol) < 0.1
-    #     @test elbo_is_monotone(vsol)
-    # end
+    # 4) A large number of candidate sources: ARD prunes the superfluous ones and the
+    #    source position update moves the survivors, recovering the true field.
+    #    (docs/examples/variational/laplace_source_learning.jl draws the frames of this
+    #    run: the sources moving, being pruned, and the field they generate.)
+    @testset "ARD with source position updates learns the sources" begin
+        N_dense = 60
+        dense_θs = LinRange(0, 2pi, N_dense + 1)[1:N_dense]
+        sources0 = [[1.35 * cos(θ), 1.35 * sin(θ)] for θ in dense_θs]
 
+        solver = VariationalBayesianSolver(
+            prior_variance = 1.0,
+            optimise_source_positions_flag = true,
+            ard_threshold = 1e6,
+            max_iters = 150,
+            elbo_tol = 1e-9
+        )
+        sim = Simulation(medium, bd; solver = solver, source_positions = sources0)
+        vsol = solve(sim)
+
+        # ARD pruned most of the candidates, down to near the number of true sources
+        @test length(vsol.fsol.positions) < length(sources0) / 3
+        @test elbo_is_monotone(vsol)
+
+        # the retained sources reproduce the field, on fresh boundary points and in the
+        # interior, to within the 5% noise level the boundary data specified
+        θ_test = LinRange(0, 2pi, 101)[1:100]
+        for r_test in (r, 0.9r)
+            p_test = [[r_test * cos(θ), r_test * sin(θ)] for θ in θ_test]
+            scale = maximum(abs.(field_mean.(p_test)))
+            errs = [abs(field(FT, vsol, p)[1] - field_mean(p)) for p in p_test] ./ scale
+            @test mean(errs) < 0.05
+        end
+    end
 
 end
 
@@ -279,8 +330,13 @@ end
     points = [[r * cos(θ), r * sin(θ)] for θ in θs]
     normals = [[cos(θ), sin(θ)] for θ in θs]
 
-    σ = 1e-3   # known noise on each of the real and imaginary parts
-    fields = [[-ϕ(p[1], p[2]) + σ * (randn() + im * randn())] for p in points]
+    # known noise on each of the real and imaginary parts, carried by the boundary
+    # data: each point is an MvNormal over the stacked [Re; Im] parts of its field
+    σ = 1e-3
+    fields = map(points) do p
+        f = -ϕ(p[1], p[2]) + σ * (randn() + im * randn())
+        MvNormal([real(f), imag(f)], σ^2 * I(2))
+    end
 
     bd = BoundaryData(TractionType();
         boundary_points = points,
@@ -301,7 +357,6 @@ end
 
     solver = VariationalBayesianSolver(
         prior_variance = 1.0,
-        noise_variance = σ^2,
         ard_threshold = 1e6,
         max_iters = 150,
         elbo_tol = 1e-9
@@ -346,7 +401,10 @@ end
         N_small = 20
         θsmall = LinRange(0, 2pi, N_small + 1)[1:N_small]
         points_small = [[r * cos(θ), r * sin(θ)] for θ in θsmall]
-        fields_small = [[-ϕ(p[1], p[2]) + σ * (randn() + im * randn())] for p in points_small]
+        fields_small = map(points_small) do p
+            f = -ϕ(p[1], p[2]) + σ * (randn() + im * randn())
+            MvNormal([real(f), imag(f)], σ^2 * I(2))
+        end
         bd_small = BoundaryData(TractionType();
             boundary_points = points_small,
             fields = fields_small,
@@ -360,7 +418,6 @@ end
 
         solver_chi = VariationalBayesianSolver(
             prior_variance = 1.0,
-            noise_variance = σ^2,
             optimise_source_positions_flag = true,
             source_position_iters = 3,
             ard_prune_flag = false,
@@ -398,7 +455,7 @@ end
     for θ in θs]
 
     σ_noise = 0.01 * maximum(norm.(traction_true))
-    fields = [t .+ σ_noise .* randn(2) for t in traction_true]
+    fields = [MvNormal(t .+ σ_noise .* randn(2), σ_noise^2 * I(2)) for t in traction_true]
 
     bd = BoundaryData(TractionType();
         boundary_points = points,
@@ -412,7 +469,6 @@ end
 
     solver = VariationalBayesianSolver(
         prior_variance = 10.0^2,
-        noise_variance = σ_noise^2,
         ard_threshold = 1e8,
         max_iters = 100,
         elbo_tol = 1e-9
@@ -482,7 +538,7 @@ end
     ]
 
     σ_noise = 0.01 * weight / (2L)
-    fields = [t .+ σ_noise .* randn(2) for t in traction_true]
+    fields = [MvNormal(t .+ σ_noise .* randn(2), σ_noise^2 * I(2)) for t in traction_true]
 
     bd = BoundaryData(TractionType();
         boundary_points = points,
@@ -517,7 +573,6 @@ end
     @testset "fixed source positions with ARD" begin
         solver = VariationalBayesianSolver(
             prior_variance = 100.0^2,
-            noise_variance = σ_noise^2,
             ard_threshold = 1e8,
             max_iters = 100,
             elbo_tol = 1e-9
@@ -540,7 +595,6 @@ end
     @testset "learning the source positions" begin
         solver = VariationalBayesianSolver(
             prior_variance = 100.0^2,
-            noise_variance = σ_noise^2,
             ard_threshold = 1e8,
             optimise_source_positions_flag = true,
             source_position_iters = 2,

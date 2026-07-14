@@ -34,32 +34,33 @@ struct BoundaryData{F <: FieldType, Dim, S, FS} <: Shape{Dim}
     interior_points::Vector{SVector{Dim,Float64}}
 end
 
-# --- Accessors for FIELDS (FS) ---
-# If it's already a Vector of SVectors:
-struct_fields(fields::AbstractVector, Dim) = fields
-flat_fields(fields::AbstractVector)        = vcat(fields...)
-cov_fields(fields::AbstractVector)         = 0.0 * I
+# --- Accessors for the FIELDS (FS) and BOUNDARY POINTS (S) ---
+# Either can be given as a plain vector of (static) vectors, as a single `MvNormal` over
+# the flattened values, or as a vector of independent `MvNormal`s, one per point.
+# The standard `cov` (from Statistics, re-exported by Distributions) is extended to return
+# the covariance of the flattened values; plain vectors are deterministic, so their
+# covariance is `0.0 * I`.
 
-# If it's a literal Distributions.MvNormal:
-function struct_fields(fields::AbstractMvNormal, Dim)
-    m = mean(fields)
-    return Vector(reinterpret(SVector{Dim, eltype(m)}, m))
-end
-flat_fields(fields::AbstractMvNormal) = mean(fields)
-cov_fields(fields::AbstractMvNormal)  = cov(fields)
+import Statistics: cov
 
+cov(x::AbstractVector{<:AbstractVector}) = 0.0 * I
+cov(x::AbstractVector{<:AbstractMvNormal}) = cat(cov.(x)...; dims = (1, 2))
 
-# --- Accessors for BOUNDARY POINTS (S) ---
 struct_points(points::AbstractVector, Dim) = points
-flat_points(points::AbstractVector)        = vcat(points...)
-cov_points(points::AbstractVector)         = 0.0 * I
-
 function struct_points(points::AbstractMvNormal, Dim)
     m = mean(points)
     return Vector(reinterpret(SVector{Dim, eltype(m)}, m))
 end
+struct_points(points::AbstractVector{<:AbstractMvNormal}, Dim) =
+    [SVector{Dim, Float64}(mean(d)) for d in points]
+
+flat_points(points::AbstractVector) = vcat(points...)
 flat_points(points::AbstractMvNormal) = mean(points)
-cov_points(points::AbstractMvNormal)  = cov(points)
+flat_points(points::AbstractVector{<:AbstractMvNormal}) = vcat(mean.(points)...)
+
+# the fields are flattened and restructured exactly like the points
+const struct_fields = struct_points
+const flat_fields = flat_points
 
 function BoundaryData(field_type::F; 
         boundary_points = [zeros(Float64, 2)], 

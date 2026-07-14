@@ -10,8 +10,8 @@ function extract_bayesian_components(sim)
     
     # Extract Covariances using the helper functions
     Σ_a = cov(prior)
-    Σ_sensor = cov_fields(bd.fields)
-    Σ_x = cov_points(bd.boundary_points)
+    Σ_sensor = cov(bd.fields)
+    Σ_x = cov(bd.boundary_points)
     
     # Extract Flat Vectors using the helper functions
     xb_flat = flat_points(bd.boundary_points)

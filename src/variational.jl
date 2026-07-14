@@ -22,14 +22,20 @@ coefficients `a`, learns the ARD prior precisions `αᵢ` (automatic relevance
 determination, pruning superfluous sources), optionally learns the source positions `χ`,
 and optionally infers the boundary perturbation `δx`. The measurement noise is known.
 
+The measurement noise is specified through the boundary data, not through the solver: give
+the boundary `fields` as a vector of `MvNormal` (one per boundary point) or as a single
+`MvNormal` over the flattened fields, whose covariance is the sensor noise. For
+complex-valued problems each point must be a `2FD`-dimensional `MvNormal` over the stacked
+real and imaginary parts `[Re; Im]` of its `FD` field components.
+
 # Keyword arguments
+- `priors`: optional vector of `MvNormal`, one per source; the (diagonal) covariance of
+  `priors[j]` sets the initial prior variances `1/αᵢ` of the coefficients of source `j`
+  (the means are ignored: the ARD prior is zero-mean).
 - `prior`: optional `MvNormal`; its (diagonal) covariance sets the initial prior variances `1/αᵢ`.
 - `prior_variance = 1.0`: initial prior variance of the coefficients. A scalar is shared by
   all coefficients; a vector must have one entry per coefficient (for complex problems either
   one entry per complex coefficient, or per real degree of freedom `[Re; Im]`).
-- `noise_variance = 0.0`: the known measurement noise variance σ² per (real) field component.
-  If left at `0.0` it is read from the covariance of the boundary `fields` (which must then be
-  an `MvNormal`). For complex data it is the variance of each of the real and imaginary parts.
 - `optimise_source_positions_flag = false`: run the M-step over the source positions `χ`
   (a few L-BFGS steps per iteration, accepted only if the bound increases).
 - `update_geometry_flag = false`: update the boundary factor `q(δx)` and re-center the
@@ -48,8 +54,8 @@ and optionally infers the boundary perturbation `δx`. The measurement noise is 
 - `source_position_iters = 5`: L-BFGS iterations per source-position M-step.
 """
 struct VariationalBayesianSolver <: AbstractSolver
+    priors::Vector{MvNormal}
     prior_variance::Vector{Float64}
-    noise_variance::Float64
     optimise_source_positions_flag::Bool
     update_geometry_flag::Bool
     learn_prior_flag::Bool
@@ -63,9 +69,9 @@ struct VariationalBayesianSolver <: AbstractSolver
 end
 
 function VariationalBayesianSolver(;
+        priors::AbstractVector{<:AbstractMvNormal} = MvNormal[],
         prior::Union{Nothing, ContinuousMultivariateDistribution} = nothing,
         prior_variance::Union{Real, AbstractVector{<:Real}} = 1.0,
-        noise_variance::Real = 0.0,
         optimise_source_positions_flag::Bool = false,
         update_geometry_flag::Bool = false,
         learn_prior_flag::Bool = true,
@@ -78,12 +84,18 @@ function VariationalBayesianSolver(;
         source_position_iters::Int = 5
     )
 
-    pv = prior === nothing ? prior_variance : diag(cov(prior))
+    pv = if !isempty(priors)
+        vcat([diag(cov(p)) for p in priors]...)
+    elseif prior !== nothing
+        diag(cov(prior))
+    else
+        prior_variance
+    end
     pvs = pv isa Real ? [Float64(pv)] : Vector{Float64}(pv)
     all(>(0), pvs) || throw(ArgumentError("all prior variances must be positive"))
 
     return VariationalBayesianSolver(
-        pvs, Float64(noise_variance),
+        Vector{MvNormal}(priors), pvs,
         optimise_source_positions_flag, update_geometry_flag,
         learn_prior_flag, ard_prune_flag, Float64(ard_threshold),
         mackay_acceleration_flag, use_greens_gradient_analytical_flag,
@@ -179,6 +191,44 @@ end
 _structured_positions(chiflat::AbstractVector, Dim::Int) =
     [SVector{Dim, Float64}(ntuple(k -> chiflat[i + k - 1], Dim)) for i in 1:Dim:length(chiflat)]
 
+# The mean data and the known measurement-noise covariance, from the boundary data alone,
+# in the ordering of the real working model: per-point stacking for real problems, and
+# complex means with `[all Re; all Im]`-stacked variances for complex ones. The noise is
+# returned as a vector of per-component variances when it is diagonal (independent sensor
+# noise), or as a full covariance matrix when the boundary `fields` carry a correlated
+# covariance. For complex problems each field point must be an `MvNormal` over the stacked
+# real and imaginary parts `[Re; Im]` of its FD field components (diagonal noise only).
+function _data_and_noise(bd::BoundaryData, FD::Int, iscomplex::Bool)
+    fields = bd.fields
+    noise_error = ArgumentError(
+        "the measurement noise must be known: give the boundary `fields` as a vector of " *
+        "`MvNormal` (one per boundary point), or a single `MvNormal` over the flattened " *
+        "fields, whose covariance is the sensor noise"
+    )
+
+    if iscomplex
+        fields isa AbstractVector{<:AbstractMvNormal} || throw(noise_error)
+        all(length(d) == 2FD for d in fields) || throw(ArgumentError(
+            "for complex-valued problems each field point must be an `MvNormal` of dimension " *
+            "2 × $FD: the stacked real and imaginary parts `[Re; Im]` of its field"
+        ))
+        means = mean.(fields)
+        vars = [diag(cov(d)) for d in fields]
+        g0 = vcat([m[1:FD] .+ im .* m[(FD + 1):2FD] for m in means]...)
+        s2 = vcat([v[1:FD] for v in vars]..., [v[(FD + 1):2FD] for v in vars]...)
+        return g0, Vector{Float64}(s2)
+    end
+
+    Σf = cov(fields)
+    Σf isa UniformScaling && throw(noise_error)
+    g0 = Vector{Float64}(flat_fields(fields))
+    Σf = Matrix{Float64}(Σf)
+    # keep the fast diagonal path for independent sensor noise; otherwise use the full
+    # (correlated) covariance
+    noise = isdiag(Σf) ? diag(Σf) : Symmetric(Σf)
+    return g0, noise
+end
+
 # The model matrix of the real working model: for complex physics the real/imaginary parts
 # are stacked so that g̃ = M̃ ã with ã = [Re a; Im a].
 function _stacked_system_matrix(source_positions, medium, bd, iscomplex::Bool)
@@ -211,10 +261,18 @@ function _initial_precisions(pv::Vector{Float64}, K::Int, Kh::Int, iscomplex::Bo
     end
 end
 
+# The measurement-noise precision Σ⁻¹ applied to a vector or matrix `X`. The noise is stored
+# either as a vector of per-component variances' reciprocals `w = 1/σ²` (independent sensor
+# noise, the fast path) or as a full precision matrix `w = Σ⁻¹` (correlated noise).
+_apply_precision(w::AbstractVector, X) = w .* X
+_apply_precision(w::AbstractMatrix, X) = w * X
+
+const NoisePrecision = Union{AbstractVector, AbstractMatrix}
+
 # E-step I, eq. (vb_coefficient_update): q(a) = N(μ_post, Σ_post) with
 # Σ_post = (M̄ᵀ Σ⁻¹ M̄ + Γ + diag α)⁻¹ and μ_post = Σ_post M̄ᵀ Σ⁻¹ g.
-function _coefficient_posterior(M::AbstractMatrix, Γ, α::AbstractVector, w::AbstractVector, g::AbstractVector)
-    H = Matrix(M' * (w .* M))
+function _coefficient_posterior(M::AbstractMatrix, Γ, α::AbstractVector, w::NoisePrecision, g::AbstractVector)
+    H = Matrix(M' * _apply_precision(w, M))
     Γ === nothing || (H .+= Γ)
     @inbounds for i in eachindex(α)
         H[i, i] += α[i]
@@ -227,17 +285,17 @@ function _coefficient_posterior(M::AbstractMatrix, Γ, α::AbstractVector, w::Ab
     end
     logdetΣ = -logdet(C)
     Σpost = Matrix(Symmetric(inv(C)))
-    μ = Σpost * (M' * (w .* g))
+    μ = Σpost * (M' * _apply_precision(w, g))
     return μ, Σpost, logdetΣ
 end
 
 # The noise-weighted expected misfit R of eq. (R):
 # R = E_q ‖g - M a - D(a) δx‖²_Σ⁻¹, evaluated after re-centering (μ_δx = 0), so that
 # R = (g - Mμ)ᵀΣ⁻¹(g - Mμ) + tr(Σ⁻¹ M Σ_post Mᵀ) + μᵀΓμ + tr(Γ Σ_post).
-function _expected_misfit(M::AbstractMatrix, Γ, μ::AbstractVector, Σpost::AbstractMatrix, w::AbstractVector, g::AbstractVector)
+function _expected_misfit(M::AbstractMatrix, Γ, μ::AbstractVector, Σpost::AbstractMatrix, w::NoisePrecision, g::AbstractVector)
     r = g - M * μ
     S = M * Σpost
-    R = dot(r, w .* r) + sum(w .* vec(sum(S .* M, dims = 2)))
+    R = dot(r, _apply_precision(w, r)) + sum(_apply_precision(w, M) .* S)
     if Γ !== nothing
         R += dot(μ, Γ * μ) + dot(Γ, Σpost)
     end
@@ -247,11 +305,11 @@ end
 # The evidence lower bound F of eq. (elbo_model), with the Gaussian KL of eq. (gaussian_kl).
 # The prior of the boundary perturbation stays anchored at the original nominal boundary:
 # relative to the current linearization point it is N(m0, Σx) with m0 = μ_x0 - x_lin.
-function _elbo(R::Real, s2::AbstractVector, α::AbstractVector, μ::AbstractVector,
+function _elbo(R::Real, Nr::Int, noise_logdet::Real, α::AbstractVector, μ::AbstractVector,
         Σpost::AbstractMatrix, logdetΣ::Real;
         μδx = nothing, Σδx = nothing, logdetΣδx::Real = 0.0, sx2 = nothing, m0 = nothing
     )
-    F = -0.5 * sum(log.(2π .* s2)) - 0.5 * R
+    F = -0.5 * (Nr * log(2π) + noise_logdet) - 0.5 * R
     K = length(α)
     F -= 0.5 * (sum(α .* (abs2.(μ) .+ diag(Σpost))) - K - sum(log.(α)) - logdetΣ)
     if μδx !== nothing
@@ -345,7 +403,7 @@ end
 # M-step objective over the source positions χ: F depends on χ only through the expected
 # misfit R(χ) (eq. (R)), so minimizing R maximizes F at fixed q.
 function _chi_misfit(chiflat::AbstractVector, medium, bd, iscomplex::Bool,
-        μ::AbstractVector, Σpost::AbstractMatrix, w::AbstractVector, g::AbstractVector, Dim::Int;
+        μ::AbstractVector, Σpost::AbstractMatrix, w::NoisePrecision, g::AbstractVector, Dim::Int;
         Γ = nothing, Σδx = nothing, d_m::Int = 1
     )
     pos = _structured_positions(chiflat, Dim)
@@ -414,36 +472,37 @@ function solve(sim::Simulation{VariationalBayesianSolver, Dim}) where Dim
     FD = field_dimension(medium)
     bd = sim.boundary_data
 
-    # --- data g (subtracting any particular solution) ---
-    g0 = flat_fields(bd.fields)
-    g_particular = field(medium, bd, sim.particular_solution)
-    g0 = g0 - vcat(g_particular...)
-
     src_pos = Vector{SVector{Dim, Float64}}(sim.source_positions)
     M0 = system_matrix(src_pos, medium, bd)
-    iscomplex = (eltype(M0) <: Complex) || (eltype(g0) <: Complex)
+    iscomplex = eltype(M0) <: Complex
+
+    # --- data g (subtracting any particular solution) and its known noise variance,
+    #     both taken from the boundary data ---
+    g0, noise = _data_and_noise(bd, FD, iscomplex)
+    g_particular = field(medium, bd, sim.particular_solution)
+    g0 = g0 - vcat(g_particular...)
 
     g = iscomplex ? Vector{Float64}(vcat(real.(g0), imag.(g0))) : Vector{Float64}(g0)
     Nr = length(g)
 
-    # --- known measurement noise ---
-    s2 = if solver.noise_variance > 0
-        fill(solver.noise_variance, Nr)
+    # measurement-noise precision w (= Σ⁻¹) and log|Σ|, from either a diagonal (vector of
+    # variances) or a full (matrix) noise covariance
+    w, noise_logdet = if noise isa AbstractVector
+        all(>(0), noise) || throw(ArgumentError("all measurement noise variances must be positive"))
+        (1 ./ noise, sum(log, noise))
     else
-        Σf = cov_fields(bd.fields)
-        if Σf isa UniformScaling
-            throw(ArgumentError("the measurement noise must be known: pass a positive `noise_variance` to the solver, or give the boundary `fields` as an `MvNormal` whose covariance is the sensor noise"))
-        end
-        Vector{Float64}(diag(Σf))
+        Cf = cholesky(Symmetric(Matrix(noise)))
+        (Matrix(Symmetric(inv(Cf))), logdet(Cf))
     end
-    all(>(0), s2) || throw(ArgumentError("all measurement noise variances must be positive"))
-    w = 1 ./ s2
 
     # --- geometry prior Σ_x (diagonal) ---
-    Σx_raw = cov_points(bd.boundary_points)
+    Σx_raw = cov(bd.boundary_points)
     do_geometry = solver.update_geometry_flag && !(Σx_raw isa UniformScaling)
     if do_geometry && iscomplex
         throw(ArgumentError("geometry updates are not implemented for complex-valued problems"))
+    end
+    if do_geometry && !(w isa AbstractVector)
+        throw(ArgumentError("geometry updates require independent (diagonal) sensor noise; the boundary `fields` covariance must be diagonal"))
     end
     sx2 = do_geometry ? Vector{Float64}(diag(Σx_raw)) : nothing
 
@@ -547,7 +606,7 @@ function solve(sim::Simulation{VariationalBayesianSolver, Dim}) where Dim
 
             opts = Optim.Options(iterations = solver.source_position_iters)
             use_analytic = solver.use_greens_gradient_analytical_flag && !iscomplex &&
-                !do_geometry && _has_greens_gradient(bd.fieldtype, medium, Dim)
+                !do_geometry && (w isa AbstractVector) && _has_greens_gradient(bd.fieldtype, medium, Dim)
 
             res = if use_analytic
                 grad! = (Gv, chi) -> _chi_misfit_gradient!(Gv, chi, medium, bd_current, μ, Σpost, w, g, Dim, FD)
@@ -569,14 +628,14 @@ function solve(sim::Simulation{VariationalBayesianSolver, Dim}) where Dim
 
         # --- monitor the bound, eq. (elbo_model) ---
         R = _expected_misfit(M, Γ, μ, Σpost, w, g)
-        F = _elbo(R, s2, α, μ, Σpost, logdetΣ;
+        F = _elbo(R, Nr, noise_logdet, α, μ, Σpost, logdetΣ;
             μδx = μδx, Σδx = Σδx, logdetΣδx = logdetΣδx, sx2 = sx2, m0 = m0)
 
         # MacKay acceleration carries no monotonicity guarantee: fall back to the EM update
         # whenever the bound fails to increase (Section on ARD of the theory document).
         if solver.learn_prior_flag && solver.mackay_acceleration_flag && !reset_baseline && F < F_prev
             α = min.(α_em, α_cap)
-            F = _elbo(R, s2, α, μ, Σpost, logdetΣ;
+            F = _elbo(R, Nr, noise_logdet, α, μ, Σpost, logdetΣ;
                 μδx = μδx, Σδx = Σδx, logdetΣδx = logdetΣδx, sx2 = sx2, m0 = m0)
         end
 

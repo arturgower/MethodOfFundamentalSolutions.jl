@@ -36,7 +36,7 @@ export solve, system_matrix, system_matrix_gradient
 include("solve.jl")
 
 export FieldResult, FundamentalSolution
-export field, field_covariance, field_std # types
+export field, field_covariance, field_std, predict_field # types
 include("results.jl")
 
 export VariationalBayesianSolver, VariationalSolution, grid_source_positions
