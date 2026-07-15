@@ -28,6 +28,9 @@ the boundary `fields` as a vector of `MvNormal` (one per boundary point) or as a
 complex-valued problems each point must be a `2FD`-dimensional `MvNormal` over the stacked
 real and imaginary parts `[Re; Im]` of its `FD` field components.
 
+The options shared with [`BayesianSolver`](@ref) live in the field `options::SolverOptions`
+(see [`SolverOptions`](@ref)); the keyword constructor accepts them as keywords directly.
+
 # Keyword arguments
 - `priors`: optional vector of `MvNormal`, one per source; the (diagonal) covariance of
   `priors[j]` sets the initial prior variances `1/αᵢ` of the coefficients of source `j`
@@ -54,18 +57,12 @@ real and imaginary parts `[Re; Im]` of its `FD` field components.
 - `source_position_iters = 5`: L-BFGS iterations per source-position M-step.
 """
 struct VariationalBayesianSolver <: AbstractSolver
-    priors::Vector{MvNormal}
+    options::SolverOptions
     prior_variance::Vector{Float64}
-    optimise_source_positions_flag::Bool
-    update_geometry_flag::Bool
-    learn_prior_flag::Bool
     ard_prune_flag::Bool
     ard_threshold::Float64
     mackay_acceleration_flag::Bool
-    use_greens_gradient_analytical_flag::Bool
     elbo_tol::Float64
-    max_iters::Int
-    source_position_iters::Int
 end
 
 function VariationalBayesianSolver(;
@@ -84,6 +81,9 @@ function VariationalBayesianSolver(;
         source_position_iters::Int = 5
     )
 
+    # The diagonal ARD prior is fully characterized by its variances, so the `priors`,
+    # `prior` and `prior_variance` keyword forms all reduce to the same variance vector
+    # (the means of the MvNormals are ignored: the prior is zero-mean).
     pv = if !isempty(priors)
         vcat([diag(cov(p)) for p in priors]...)
     elseif prior !== nothing
@@ -94,12 +94,19 @@ function VariationalBayesianSolver(;
     pvs = pv isa Real ? [Float64(pv)] : Vector{Float64}(pv)
     all(>(0), pvs) || throw(ArgumentError("all prior variances must be positive"))
 
+    options = SolverOptions(;
+        optimise_source_positions_flag = optimise_source_positions_flag,
+        use_greens_gradient_analytical_flag = use_greens_gradient_analytical_flag,
+        update_geometry_flag = update_geometry_flag,
+        learn_prior_flag = learn_prior_flag,
+        max_iters = max_iters,
+        source_position_iters = source_position_iters
+    )
+
     return VariationalBayesianSolver(
-        Vector{MvNormal}(priors), pvs,
-        optimise_source_positions_flag, update_geometry_flag,
-        learn_prior_flag, ard_prune_flag, Float64(ard_threshold),
-        mackay_acceleration_flag, use_greens_gradient_analytical_flag,
-        Float64(elbo_tol), max_iters, source_position_iters
+        options, pvs,
+        ard_prune_flag, Float64(ard_threshold),
+        mackay_acceleration_flag, Float64(elbo_tol)
     )
 end
 
@@ -120,7 +127,9 @@ the boundary lives in `boundary_shape`.
   `fsol.coefficients_covariance` the posterior covariance over the retained degrees of
   freedom. Use it with `field`, `field_covariance` and `field_std` (which also accept the
   `VariationalSolution` directly). For complex problems the coefficients are complex and
-  the posterior covariance is not propagated (`0.0 * I`).
+  their posterior covariance is stored over the stacked real degrees of freedom
+  `[Re a; Im a]`; `field_covariance` then returns the covariance of the stacked field
+  `[Re f; Im f]`.
 - `boundary_shape::BoundaryShape`: the posterior of the boundary. When the geometry was
   updated (`update_geometry_flag`) its `boundary_points` is an `MvNormal` whose mean is the
   re-centered boundary and whose covariance is the posterior covariance Σ_δx; otherwise it
@@ -498,7 +507,7 @@ function solve(sim::Simulation{VariationalBayesianSolver, Dim}) where Dim
 
     # --- geometry prior Σ_x (diagonal) ---
     Σx_raw = cov(bd.boundary_shape.boundary_points)
-    do_geometry = solver.update_geometry_flag && !(Σx_raw isa UniformScaling)
+    do_geometry = solver.options.update_geometry_flag && !(Σx_raw isa UniformScaling)
     if do_geometry && iscomplex
         throw(ArgumentError("geometry updates are not implemented for complex-valued problems"))
     end
@@ -538,7 +547,7 @@ function solve(sim::Simulation{VariationalBayesianSolver, Dim}) where Dim
     Σpost = Matrix{Float64}(I, K, K)
     logdetΣ = 0.0
 
-    for it in 1:solver.max_iters
+    for it in 1:solver.options.max_iters
         reset_baseline = false
 
         # --- E-step I: update q(a), eq. (vb_coefficient_update) ---
@@ -565,13 +574,13 @@ function solve(sim::Simulation{VariationalBayesianSolver, Dim}) where Dim
 
         # --- M-step: prior precisions, EM update eq. (alpha_update) ---
         α_em = 1 ./ (abs2.(μ) .+ diag(Σpost))
-        if solver.learn_prior_flag
+        if solver.options.learn_prior_flag
             α_new = solver.mackay_acceleration_flag ? _mackay_precisions(α, μ, Σpost, α_em) : α_em
             α = min.(α_new, α_cap)
         end
 
         # --- ARD pruning: remove sources whose every precision has diverged ---
-        if solver.learn_prior_flag && solver.ard_prune_flag
+        if solver.options.learn_prior_flag && solver.ard_prune_flag
             n_active = length(src_pos)
             keep = [j for j in 1:n_active if any(α[_source_columns(j, n_active, FD, iscomplex)] .< solver.ard_threshold)]
             if isempty(keep)
@@ -598,15 +607,15 @@ function solve(sim::Simulation{VariationalBayesianSolver, Dim}) where Dim
         end
 
         # --- M-step: source positions χ, a few L-BFGS steps on eq. (chi_gradient) ---
-        if solver.optimise_source_positions_flag && !isempty(src_pos)
+        if solver.options.optimise_source_positions_flag && !isempty(src_pos)
             chi0 = Vector{Float64}(vcat(src_pos...))
             R0 = _expected_misfit(M, Γ, μ, Σpost, w, g)
 
             obj = chi -> _chi_misfit(chi, medium, bd_current, iscomplex, μ, Σpost, w, g, Dim;
                 Γ = Γ, Σδx = do_geometry ? Σδx : nothing, d_m = d_m)
 
-            opts = Optim.Options(iterations = solver.source_position_iters)
-            use_analytic = solver.use_greens_gradient_analytical_flag && !iscomplex &&
+            opts = Optim.Options(iterations = solver.options.source_position_iters)
+            use_analytic = solver.options.use_greens_gradient_analytical_flag && !iscomplex &&
                 !do_geometry && (w isa AbstractVector) && _has_greens_gradient(bd.fieldtype, medium, Dim)
 
             res = if use_analytic
@@ -634,7 +643,7 @@ function solve(sim::Simulation{VariationalBayesianSolver, Dim}) where Dim
 
         # MacKay acceleration carries no monotonicity guarantee: fall back to the EM update
         # whenever the bound fails to increase (Section on ARD of the theory document).
-        if solver.learn_prior_flag && solver.mackay_acceleration_flag && !reset_baseline && F < F_prev
+        if solver.options.learn_prior_flag && solver.mackay_acceleration_flag && !reset_baseline && F < F_prev
             α = min.(α_em, α_cap)
             F = _elbo(R, Nr, noise_logdet, α, μ, Σpost, logdetΣ;
                 μδx = μδx, Σδx = Σδx, logdetΣδx = logdetΣδx, sx2 = sx2, m0 = m0)
@@ -655,17 +664,19 @@ function solve(sim::Simulation{VariationalBayesianSolver, Dim}) where Dim
 
     relative_boundary_error = norm(M * μ - g) / norm(g)
 
-    coefficients, coefficients_covariance = if iscomplex
+    # complex coefficients keep their posterior covariance over the stacked real degrees
+    # of freedom [Re a; Im a], the convention of FundamentalSolution
+    coefficients = if iscomplex
         Khh = length(src_pos) * FD
-        μ[1:Khh] .+ im .* μ[(Khh + 1):end], 0.0 * I
+        μ[1:Khh] .+ im .* μ[(Khh + 1):end]
     else
-        copy(μ), Σpost
+        copy(μ)
     end
 
     fsol = FundamentalSolution(medium;
         positions = collect(src_pos),
         coefficients = coefficients,
-        coefficients_covariance = coefficients_covariance,
+        coefficients_covariance = Σpost,
         particular_solution = sim.particular_solution,
         relative_boundary_error = relative_boundary_error
     )

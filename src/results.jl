@@ -1,19 +1,24 @@
 """
-    FundamentalSolution{Dim,P<:PhysicalMedium{Dim},T,C}
+    FundamentalSolution{Dim,P<:PhysicalMedium{Dim},PS,T,C,M}
 
-A type representing a fundamental solution. The fundamental solution is constructed by placing source points at specified positions outside the domain of interest and determining their coefficients to satisfy boundary conditions. in terms of point sources placed outside the body.
+A type representing a fundamental solution. The fundamental solution is constructed by placing source points at specified positions outside the domain of interest and determining their coefficients to satisfy boundary conditions.
 
 # Fields
 - `medium::P`: Physical medium containing material properties
 - `positions::Vector{SVector{Dim,T}}`: Vector of positions of the point sources in `Dim`-dimensional space
 - `coefficients::Vector{C}`: Vector of coefficients for the point sources
+- `coefficients_covariance::M`: the covariance of the coefficients (`0.0 * I` when they are
+  deterministic). For real coefficients it is `K × K` with `K = length(coefficients)`; for
+  complex coefficients it is the `2K × 2K` covariance of the stacked real degrees of
+  freedom `[Re a; Im a]`, and `field_covariance` correspondingly returns the covariance of
+  the stacked field `[Re f; Im f]`.
 """
-struct FundamentalSolution{Dim,P<:PhysicalMedium{Dim}, PS <:ParticularSolution, T,C}
+struct FundamentalSolution{Dim,P<:PhysicalMedium{Dim}, PS <:ParticularSolution, T, C, M}
     medium::P
     particular_solution::PS
     positions::Vector{SVector{Dim,T}}
     coefficients::Vector{C}
-    coefficients_covariance::Union{AbstractMatrix{Float64}, UniformScaling{Float64}}
+    coefficients_covariance::M
     relative_boundary_error::T
 end
 
@@ -21,15 +26,15 @@ function FundamentalSolution(medium::P;
         particular_solution::PS = NoParticularSolution(),
         positions::Vector{<:AbstractVector} = [zeros(Float64,spatial_dimension(medium))],
         coefficients::AbstractVector = [one(Float64)],
-        coefficients_covariance::Union{AbstractMatrix{Float64}, UniformScaling{Float64}} = 0.0*I,
+        coefficients_covariance::Union{AbstractMatrix, UniformScaling} = 0.0*I,
         relative_boundary_error = zero(Float64)
     ) where {P<:PhysicalMedium, PS <: ParticularSolution}
-    
+
     # Extract dimension information
     Dim = spatial_dimension(medium)
     T = eltype(positions[1])
     C = eltype(coefficients)
-    
+
     # Validate dimensions
     if !all(p -> length(p) == Dim, positions)
         throw(ArgumentError("All positions must have dimension $Dim"))
@@ -37,28 +42,30 @@ function FundamentalSolution(medium::P;
 
     # Validate coefficients
     FD = field_dimension(medium)
-    if length(coefficients) != length(positions) * FD 
+    if length(coefficients) != length(positions) * FD
         throw(ArgumentError(
             "Expected $(length(positions) * FD) coefficients but got $(length(coefficients))"
         ))
+    end
+
+    # Validate the covariance: real coefficients carry a K × K covariance, complex ones the
+    # 2K × 2K covariance of the stacked [Re a; Im a]
+    if coefficients_covariance isa AbstractMatrix
+        K = length(coefficients)
+        expected = (C <: Complex) ? 2K : K
+        if size(coefficients_covariance) != (expected, expected)
+            throw(ArgumentError(
+                "Expected a $expected × $expected coefficients_covariance but got one of size $(size(coefficients_covariance))"
+            ))
+        end
     end
 
     # Convert inputs to proper types
     pos_converted = convert(Vector{SVector{Dim,T}}, positions)
     coef_converted = convert(Vector{C}, coefficients)
 
-    return FundamentalSolution{Dim,P,PS,T,C}(medium, particular_solution, pos_converted, coef_converted, coefficients_covariance, relative_boundary_error)
+    return FundamentalSolution{Dim,P,PS,T,C,typeof(coefficients_covariance)}(medium, particular_solution, pos_converted, coef_converted, coefficients_covariance, relative_boundary_error)
 end
-
-
-# function FundamentalSolution(medium::P,
-#         positions::Vector{<:AbstractVector},
-#         coefficients::AbstractVector; 
-#         kws... 
-#     ) where {P<:PhysicalMedium, PS <: ParticularSolution}
-    
-#     return FundamentalSolution(medium, particular_solution, positions, coefficients)
-# end
 
 function field(field_type::F, medium::P, psol::NoParticularSolution, x::AbstractVector, outward_normal::AbstractVector) where {F <: FieldType, P <: PhysicalMedium} 
     if medium isa Elastostatic
@@ -92,23 +99,37 @@ function field(medium::P, bd::BoundaryData, psol::PS) where {P <: PhysicalMedium
     end
 end
 
+"""
+    field_covariance(field_type, fsol::FundamentalSolution, x, outward_normal = ones(length(x)))
+
+The covariance of the field of `fsol` at `x`, propagated from the covariance of its
+coefficients. For real coefficients this is the `FD × FD` covariance of the field
+components. For complex coefficients the covariance is stored over the stacked real
+degrees of freedom `[Re a; Im a]`, and the returned matrix is the `2FD × 2FD` covariance
+of the stacked field `[Re f; Im f]`.
+"""
 function field_covariance(field_type::F, fsol::FundamentalSolution, x::AbstractVector, outward_normal::AbstractVector = ones(x |> length)) where F <: FieldType
- 
+
     outward_normal = SVector(outward_normal...) ./ norm(outward_normal)
     x = SVector(x...)
 
     Gs = [
-        greens(field_type, fsol.medium, x - p, outward_normal) 
+        greens(field_type, fsol.medium, x - p, outward_normal)
     for p in fsol.positions]
 
     Phi = hcat(Gs...)
-    
+
     # Extract the covariance of the solved coefficients
     Sigma_post = fsol.coefficients_covariance
-    
-    cov = Phi * Sigma_post * Phi'
-    
-    return cov
+
+    if eltype(fsol.coefficients) <: Complex
+        # f = Phi a with complex a: stack the real and imaginary parts so that
+        # [Re f; Im f] = Phis [Re a; Im a], matching the stacking of the stored covariance
+        Phis = [real.(Phi) -imag.(Phi); imag.(Phi) real.(Phi)]
+        return Phis * Sigma_post * Phis'
+    end
+
+    return Phi * Sigma_post * Phi'
 end
 
 function field_std(

@@ -6,6 +6,46 @@ Abstract type for different solution methods for the Method of Fundamental Solut
 abstract type AbstractSolver end
 
 """
+    SolverOptions
+
+Options shared by the solvers that can optimise the source positions
+([`BayesianSolver`](@ref) and [`VariationalBayesianSolver`](@ref)), stored in their
+`options` field. Each solver's keyword constructor accepts these as keywords directly.
+
+# Fields
+- `optimise_source_positions_flag::Bool`: optimise the source positions χ.
+- `use_greens_gradient_analytical_flag::Bool`: use the analytic `greens_gradient` where
+  available; otherwise finite differences are used.
+- `update_geometry_flag::Bool`: update the boundary factor and re-center the boundary
+  (used by [`VariationalBayesianSolver`](@ref)).
+- `learn_prior_flag::Bool`: learn the prior (used by [`VariationalBayesianSolver`](@ref)).
+- `max_iters::Int`: maximum number of iterations of the solver's outer loop.
+- `source_position_iters::Int`: inner iterations per source-position optimisation step.
+"""
+struct SolverOptions
+    optimise_source_positions_flag::Bool
+    use_greens_gradient_analytical_flag::Bool
+    update_geometry_flag::Bool
+    learn_prior_flag::Bool
+    max_iters::Int
+    source_position_iters::Int
+end
+
+function SolverOptions(;
+        optimise_source_positions_flag::Bool = false,
+        use_greens_gradient_analytical_flag::Bool = true,
+        update_geometry_flag::Bool = false,
+        learn_prior_flag::Bool = true,
+        max_iters::Int = 50,
+        source_position_iters::Int = 5
+    )
+    return SolverOptions(
+        optimise_source_positions_flag, use_greens_gradient_analytical_flag,
+        update_geometry_flag, learn_prior_flag, max_iters, source_position_iters
+    )
+end
+
+"""
     ParticularSolution
 
 A type used to specify the type of particular solution to add to the boundary data.
@@ -38,32 +78,37 @@ struct TikhonovSolver{T<:Real} <: AbstractSolver
 end
 
 """
-    BayesianSolver{T<:Real} <: AbstractSolver
+    BayesianSolver{P} <: AbstractSolver
 
 Bayesian solver for MFS.
 
 # Parameters
 - `prior::P`: The prior distribution for the solution
-The solution is the posterior distribution over the coefficients given the boundary data and the prior. 
+- `options::SolverOptions`: the options shared with the other solvers, see
+  [`SolverOptions`](@ref); the keyword constructor accepts them as keywords directly.
+The solution is the posterior distribution over the coefficients given the boundary data and the prior.
 """
 struct BayesianSolver{P<:ContinuousMultivariateDistribution} <: AbstractSolver
     prior::P
-    optimise_source_positions_flag::Bool 
-    use_greens_gradient_analytical_flag::Bool
+    options::SolverOptions
     gradient_tol::Float64
     objective_function_tol::Float64
-    max_iters::Int  
 end
 
 function BayesianSolver(
-    prior::ContinuousMultivariateDistribution; 
-    optimise_source_positions_flag::Bool = false, 
+    prior::ContinuousMultivariateDistribution;
+    optimise_source_positions_flag::Bool = false,
     use_greens_gradient_analytical_flag::Bool = true,
     gradient_tol::Float64 = 1e-3,
     objective_function_tol::Float64 = 1e-4,
     max_iters::Int = 50
 )
-    return BayesianSolver{typeof(prior)}(prior, optimise_source_positions_flag, use_greens_gradient_analytical_flag, gradient_tol, objective_function_tol, max_iters)
+    options = SolverOptions(;
+        optimise_source_positions_flag = optimise_source_positions_flag,
+        use_greens_gradient_analytical_flag = use_greens_gradient_analytical_flag,
+        max_iters = max_iters
+    )
+    return BayesianSolver{typeof(prior)}(prior, options, gradient_tol, objective_function_tol)
 end
 
 struct Simulation{S <: AbstractSolver, Dim, P<:PhysicalMedium{Dim}, PS <:ParticularSolution, BD <: BoundaryData}
@@ -214,7 +259,7 @@ function solve(sim::Simulation{TikhonovSolver{T}}) where T
 
     relative_error = norm(M * coes - forcing) / norm(forcing)
 
-    println("Solved the system with condition number:$(condM), and with a relative error of boundary data: $(norm(M * coes - forcing) / norm(forcing)) with a tolerance of $(sim.solver.tolerance)")
+    @info "Solved the system with condition number $(condM), and with a relative error of the boundary data of $(relative_error), using the tolerance $(sim.solver.tolerance)"
 
     return FundamentalSolution(sim.medium; 
         positions = sim.source_positions,
@@ -229,8 +274,8 @@ function solve(
     ) where {Dim}
     
     # 1. Determine Source Positions (chi)
-    if sim.solver.optimise_source_positions_flag
-        println("Optimizing source positions...")
+    if sim.solver.options.optimise_source_positions_flag
+        @info "Optimizing source positions..."
         best_source_positions = optimise_source_positions(sim)
     else
         best_source_positions = vcat(sim.source_positions...)

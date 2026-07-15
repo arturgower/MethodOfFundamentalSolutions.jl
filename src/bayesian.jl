@@ -27,126 +27,90 @@ end
 
 
 function geometric_covariance(
-    sim, 
+    sim,
     structured_chi::Vector{SVector{2, T}};
     h::Real = 1e-5
 ) where T
     # Clean extraction of baseline variables
     _, xb_flat, _, Sigma_a, _, Sigma_x_input = extract_bayesian_components(sim)
-    
+
     n_xb = length(xb_flat)
     n_sensors = div(n_xb, 2)
-    
-    if sim.solver.use_greens_gradient_analytical_flag
-        
-        # ---------------------------------
-        #    Analytical Gradient Branch
-        # ---------------------------------
-        #grad_M = grad_M_func(xb_flat, chi)
-        grad_M = system_matrix_gradient(structured_chi, sim.medium, sim.boundary_data)
-        N, K, _ = size(grad_M)
-        d_m = div(N, n_sensors)
-        
-        Cx = zeros(T, N, N)
-        is_full_sigma = !(Sigma_x_input isa UniformScaling) && (size(Sigma_x_input, 1) == n_xb)        
-            for r in 1:N, s in 1:N
-                i = div(r - 1, d_m) + 1
-                j = div(s - 1, d_m) + 1
-                
-                if i == j 
-                    Sigma_x_block = is_full_sigma ? Sigma_x_input[(2i-1):(2i), (2i-1):(2i)] : Sigma_x_input
-                    J_r = grad_M[r, :, :] 
-                    J_s = grad_M[s, :, :]
-                    
-                    Cx[r, s] = tr(Sigma_a * J_r * Sigma_x_block * J_s')
-                end
-            end
-        return Cx
-        
+
+    # the gradient of the system matrix with respect to the coordinates of each row's own
+    # boundary point, either analytical or by central finite differences
+    grad_M = if sim.solver.options.use_greens_gradient_analytical_flag
+        system_matrix_gradient(structured_chi, sim.medium, sim.boundary_data)
     else
-        
-        # ---------------------------------
-        #    Finite Difference Branch
-        # ---------------------------------
-        #M_nom = M_func(xb_flat, chi)
-        M_nom = system_matrix(structured_chi, sim.medium, sim.boundary_data)
-        N, K = size(M_nom)
-        d_m = div(N, n_sensors)
-        
-        jac_M = zeros(T, N * K, n_xb)
-        # 1. Allocate the structured boundary points ONCE outside the loop.
-        # This gives system_matrix the exact heap-allocated Vector it demands.
-        xb_structured = Vector(reinterpret(SVector{2, eltype(xb_flat)}, xb_flat))
-
-        # a BoundaryData sharing everything with the nominal one except the (perturbed)
-        # boundary points, which stay aliased to xb_structured
-        bd0 = sim.boundary_data
-        shape0 = bd0.boundary_shape
-        bd_perturbed = BoundaryData(bd0.fieldtype,
-            BoundaryShape(xb_structured, shape0.normals, shape0.interior_points),
-            bd0.fields
-        )
-
-        for v in 1:n_xb
-            # 2. Map the flat index (v) to the SVector index (s_idx) and the coordinate (x=1, y=2)
-            s_idx = div(v - 1, 2) + 1
-            coord = mod1(v, 2)
-    
-            # Save the original SVector
-            orig_svec = xb_structured[s_idx]
-            
-            # --- Forward Step ---
-            # Create a new SVector on the stack (zero heap allocations) and overwrite the slot
-            if coord == 1
-                xb_structured[s_idx] = SVector(orig_svec[1] + h, orig_svec[2])
-            else
-                xb_structured[s_idx] = SVector(orig_svec[1], orig_svec[2] + h)
-            end
-            
-            M_fw = system_matrix(structured_chi, sim.medium, bd_perturbed)
-            
-            # --- Backward Step ---
-            if coord == 1
-                xb_structured[s_idx] = SVector(orig_svec[1] - h, orig_svec[2])
-            else
-                xb_structured[s_idx] = SVector(orig_svec[1], orig_svec[2] - h)
-            end
-            
-            M_bw = system_matrix(structured_chi, sim.medium, bd_perturbed)
-            
-            # --- Reset ---
-            # Put the original SVector back before moving to the next coordinate
-            xb_structured[s_idx] = orig_svec
-            
-            # Apply math safely (using the corrected explicit broadcast)
-            @views jac_M[:, v] .= (vec(M_fw) .- vec(M_bw)) ./ (2 * h)
-        end
-        
-        Cx = zeros(T, N, N)
-        is_full_sigma = (Sigma_x_input isa AbstractMatrix) && size(Sigma_x_input, 1) == n_xb
-        
-        for r in 1:N, s in 1:N
-            i = div(r - 1, d_m) + 1
-            j = div(s - 1, d_m) + 1
-            
-            if i == j 
-                Sigma_x_block = is_full_sigma ? Sigma_x_input[(2i-1):(2i), (2i-1):(2i)] : Sigma_x_input
-                J_r = zeros(T, K, 2)
-                J_s = zeros(T, K, 2)
-                
-                for c in 1:K
-                    idx_r = r + (c - 1) * N
-                    idx_s = s + (c - 1) * N
-                    
-                    J_r[c, 1] = jac_M[idx_r, 2i - 1]; J_r[c, 2] = jac_M[idx_r, 2i]
-                    J_s[c, 1] = jac_M[idx_s, 2j - 1]; J_s[c, 2] = jac_M[idx_s, 2j]
-                end
-                
-                Cx[r, s] = tr(Sigma_a * J_r * Sigma_x_block * J_s')
-            end
-        end
-        return Cx
+        _system_matrix_gradient_fd(sim, structured_chi, xb_flat, h)
     end
+
+    N = size(grad_M, 1)
+    d_m = div(N, n_sensors)
+
+    # Cx[r, s] = tr(Σ_a J_r Σ_x^{(i)} J_sᵀ) with J_r = ∂M[r, :]/∂x_i, nonzero only when the
+    # rows r and s belong to the same sensor i
+    Cx = zeros(T, N, N)
+    is_full_sigma = !(Sigma_x_input isa UniformScaling) && (size(Sigma_x_input, 1) == n_xb)
+    for r in 1:N, s in 1:N
+        i = div(r - 1, d_m) + 1
+        j = div(s - 1, d_m) + 1
+
+        if i == j
+            Sigma_x_block = is_full_sigma ? Sigma_x_input[(2i-1):(2i), (2i-1):(2i)] : Sigma_x_input
+            J_r = grad_M[r, :, :]
+            J_s = grad_M[s, :, :]
+
+            Cx[r, s] = tr(Sigma_a * J_r * Sigma_x_block * J_s')
+        end
+    end
+    return Cx
+end
+
+# Central finite-difference version of `system_matrix_gradient`: grad_M[r, :, d] is the
+# derivative of row r of the system matrix with respect to coordinate d of that row's own
+# boundary point (row r depends on no other boundary point, so only those rows are stored).
+function _system_matrix_gradient_fd(sim, structured_chi, xb_flat, h::Real)
+    T = eltype(xb_flat)
+    n_xb = length(xb_flat)
+    n_sensors = div(n_xb, 2)
+
+    # Allocate the structured boundary points ONCE outside the loop, and a BoundaryData
+    # sharing everything with the nominal one except the boundary points, which stay
+    # aliased to xb_structured so that perturbing them in place is enough.
+    xb_structured = Vector(reinterpret(SVector{2, T}, xb_flat))
+    bd0 = sim.boundary_data
+    shape0 = bd0.boundary_shape
+    bd_perturbed = BoundaryData(bd0.fieldtype,
+        BoundaryShape(xb_structured, shape0.normals, shape0.interior_points),
+        bd0.fields
+    )
+
+    N, K = size(system_matrix(structured_chi, sim.medium, bd_perturbed))
+    d_m = div(N, n_sensors)
+    grad_M = zeros(T, N, K, 2)
+
+    for v in 1:n_xb
+        # map the flat index (v) to the SVector index (s_idx) and the coordinate (x=1, y=2)
+        s_idx = div(v - 1, 2) + 1
+        coord = mod1(v, 2)
+        step = coord == 1 ? SVector(h, zero(h)) : SVector(zero(h), h)
+
+        orig_svec = xb_structured[s_idx]
+
+        xb_structured[s_idx] = orig_svec + step
+        M_fw = system_matrix(structured_chi, sim.medium, bd_perturbed)
+
+        xb_structured[s_idx] = orig_svec - step
+        M_bw = system_matrix(structured_chi, sim.medium, bd_perturbed)
+
+        xb_structured[s_idx] = orig_svec
+
+        rows = ((s_idx - 1) * d_m + 1):(s_idx * d_m)
+        @views grad_M[rows, :, coord] .= (M_fw[rows, :] .- M_bw[rows, :]) ./ (2 * h)
+    end
+
+    return grad_M
 end
 #Objective function: Compute the negative log-marginal likelihood.
 
@@ -183,7 +147,7 @@ function optimise_source_positions(sim, init_chi::AbstractVector)
     opts = Optim.Options(
         g_tol = sim.solver.gradient_tol,
         f_reltol = sim.solver.objective_function_tol,
-        iterations = sim.solver.max_iters,
+        iterations = sim.solver.options.max_iters,
         show_trace = false
     )
     res = optimize(obj, Vector(init_chi), LBFGS(),opts)
@@ -249,10 +213,10 @@ function construct_prior(
     opts = Optim.Options(
         g_tol = sim.solver.gradient_tol,
         f_reltol = sim.solver.objective_function_tol,
-        iterations = sim.solver.max_iters,
+        iterations = sim.solver.options.max_iters,
         show_trace = false
     )
-    
+
     # 6. Run the joint optimization
     # Note: If you want to use ForwardDiff, change to LBFGS(), autodiff=AutoForwardDiff()
     res = optimize(joint_obj, Vector(theta_init), LBFGS(), opts)
@@ -271,14 +235,12 @@ function construct_prior(
     opt_variances = exp.(omega_opt)
     opt_prior = MvNormal(zeros(length(opt_variances)), Diagonal(opt_variances))
     
-    # 9. Create the updated BayesianSolver
-    opt_solver = BayesianSolver(
-        opt_prior; 
-        optimise_source_positions_flag = sim.solver.optimise_source_positions_flag,
-        use_greens_gradient_analytical_flag = sim.solver.use_greens_gradient_analytical_flag,
-        gradient_tol = sim.solver.gradient_tol,
-        objective_function_tol = sim.solver.objective_function_tol,
-        max_iters = sim.solver.max_iters
+    # 9. Create the updated BayesianSolver, keeping the options and tolerances
+    opt_solver = BayesianSolver{typeof(opt_prior)}(
+        opt_prior,
+        sim.solver.options,
+        sim.solver.gradient_tol,
+        sim.solver.objective_function_tol
     )
     
     opt_sim = Simulation(

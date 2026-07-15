@@ -382,6 +382,19 @@ end
         @test length(vsol.fsol.positions) < length(sources)   # ARD pruned sources
         @test elbo_is_monotone(vsol)
         @test 0.1 < vsol.misfit_ratio < 5.0
+
+        # the posterior covariance is propagated for complex problems: field_covariance
+        # returns the 2FD × 2FD covariance of the stacked [Re; Im] field, and its 3σ error
+        # bars cover the true field at fresh boundary points
+        @test size(field_covariance(TractionType(), vsol, [0.5, 0.0])) == (2, 2)
+        covered = sum(θ_test) do θ
+            p = [r * cos(θ), r * sin(θ)]
+            pred = field(TractionType(), vsol, p, [cos(θ), sin(θ)])[1]
+            stds = field_std(TractionType(), vsol, p, [cos(θ), sin(θ)])
+            err = pred - (-ϕ(p[1], p[2]))
+            (abs(real(err)) <= 3 * stds[1] + 1e-6) + (abs(imag(err)) <= 3 * stds[2] + 1e-6)
+        end
+        @test covered / (2 * length(θ_test)) >= 0.9
     end
 
     @testset "sources everywhere and ARD" begin
