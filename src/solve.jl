@@ -97,10 +97,8 @@ function system_matrix(
     bd::BoundaryData
 ) where {Dim, P<:PhysicalMedium{Dim}}
 
-    points = bd.boundary_points isa AbstractMvNormal ? 
-          struct_points(bd.boundary_points, Dim) : 
-          bd.boundary_points
-    normals = bd.outward_normals
+    points = mean_points(bd)
+    normals = mean_normals(bd)
 
     # The comprehension block automatically handles the return type
     Ms = [
@@ -132,12 +130,9 @@ function system_matrix_gradient(
     bd::BoundaryData
 ) where {Dim, P<:PhysicalMedium{Dim}}
 
-    points = bd.boundary_points isa AbstractMvNormal ? 
-          struct_points(bd.boundary_points, Dim) : 
-          bd.boundary_points
-          
-    normals = bd.outward_normals
-    
+    points = mean_points(bd)
+    normals = mean_normals(bd)
+
     n_sensors = length(points)
     n_sources = length(source_positions)
 
@@ -203,7 +198,7 @@ function solve(sim::Simulation{TikhonovSolver{T}}) where T
 
     M = system_matrix(sim)
 
-    forcing = vcat(sim.boundary_data.fields...)
+    forcing = flat_fields(sim.boundary_data.fields)
     forcing_particular = field(sim.medium, sim.boundary_data, sim.particular_solution)
     forcing = forcing - vcat(forcing_particular...)
     
@@ -268,23 +263,24 @@ Return source positions for MFS from some `BoundaryData`.
 
 - α: scale factor for the distance of the source from the boundary d = α * h, where h is the average distance between consecutive points on the boundary.
 """
-function source_positions(cloud::BoundaryData; relative_source_distance = 1.0) 
+function source_positions(cloud::Union{BoundaryShape, BoundaryData}; relative_source_distance = 1.0)
 
-    points = cloud.boundary_points 
+    points = mean_points(cloud)
+    normals = mean_normals(cloud)
     len = points |> length
-    
+
     # Note this could be calculated at the same time as the outward normals. But that would make the code quite ugly!
     # Sample just a few number of points to approximate the distance between neighbours
     sampled_rng = LinRange(1,len, min(6,len)) .|> round .|> Int
-    neighbors_dists = map(points[sampled_rng]) do p 
+    neighbors_dists = map(points[sampled_rng]) do p
         dists = [norm(p - q) for q in points]
         idx = sortperm(dists)[2:min(3, len)]
         mean(dists[idx])
     end
     source_distance = mean(neighbors_dists) * relative_source_distance
-    
-    positions = map(cloud.boundary_points |> eachindex) do i
-        cloud.boundary_points[i] + cloud.outward_normals[i] .* source_distance 
+
+    positions = map(eachindex(points)) do i
+        points[i] + normals[i] .* source_distance
     end
 
     # Occasionally the normal direction is wrong. In which case, do not add a source inside the body!

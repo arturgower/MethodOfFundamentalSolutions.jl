@@ -89,8 +89,8 @@ end
 
         Σ_exact = inv(Symmetric(M' * (invΣ * M) + Diagonal(1 ./ source_vars)))
         μ_exact = Σ_exact * (M' * (invΣ * field_mean.(points)))
-        @test vsol.coefficients_mean ≈ μ_exact rtol = 1e-8
-        @test vsol.coefficients_covariance ≈ Σ_exact rtol = 1e-8
+        @test vsol.fsol.coefficients ≈ μ_exact rtol = 1e-8
+        @test vsol.fsol.coefficients_covariance ≈ Σ_exact rtol = 1e-8
     end
 
     # 2b) The field covariance induced by independent source amplitudes aᵢ ~ N(μᵢ, vᵢ) is the
@@ -116,10 +116,10 @@ end
         sim = Simulation(medium, bd_full; solver = solver, source_positions = source_pos)
         vsol = solve(sim)
         
-        @test diag(vsol.coefficients_covariance) ≈ source_vars rtol = 1e-5
+        @test diag(vsol.fsol.coefficients_covariance) ≈ source_vars rtol = 1e-5
 
         # posterior variance is diagonal
-        @test norm(vsol.coefficients_covariance - diagm(diag(vsol.coefficients_covariance))) / norm(vsol.coefficients_covariance) < 1e-5
+        @test norm(vsol.fsol.coefficients_covariance - diagm(diag(vsol.fsol.coefficients_covariance))) / norm(vsol.fsol.coefficients_covariance) < 1e-5
         
         # if we learn the prior from the data, the posterior variance approximately recover the true source variances
         solver = VariationalBayesianSolver(
@@ -131,8 +131,8 @@ end
         sim = Simulation(medium, bd_full; solver = solver, source_positions = source_pos)
         vsol = solve(sim)
         
-        @test diag(vsol.coefficients_covariance) ≈ source_vars rtol = 1e-2
-        @test norm(vsol.coefficients_covariance - diagm(diag(vsol.coefficients_covariance))) / norm(vsol.coefficients_covariance) < 1e-5
+        @test diag(vsol.fsol.coefficients_covariance) ≈ source_vars rtol = 1e-2
+        @test norm(vsol.fsol.coefficients_covariance - diagm(diag(vsol.fsol.coefficients_covariance))) / norm(vsol.fsol.coefficients_covariance) < 1e-5
 
     end
 
@@ -151,7 +151,7 @@ end
         vsol = solve(sim)
 
         # recovery well below the 5% standard deviation of the amplitudes
-        @test vsol.coefficients_mean ≈ source_amps rtol = 2e-2
+        @test vsol.fsol.coefficients ≈ source_amps rtol = 2e-2
         pred = [field(FT, vsol, x)[1] for x in points]
         @test pred ≈ field_mean.(points) rtol = 2e-2
         @test elbo_is_monotone(vsol)
@@ -208,7 +208,7 @@ end
     bd = BoundaryData(TractionType();
         boundary_points = points,
         fields = [randn(2) for _ in θs],
-        outward_normals = normals,
+        normals = normals,
         interior_points = [[0.0, 0.0]]
     )
 
@@ -277,7 +277,7 @@ end
     bd = BoundaryData(TractionType();
         boundary_points = points,
         fields = field_distribution,
-        outward_normals = normals
+        normals = normals
     )
 
     ns = 10
@@ -309,8 +309,8 @@ end
     )
     vsol = solve(vsim)
 
-    @test isapprox(vsol.coefficients_mean, μ_exact; rtol = 1e-8)
-    @test isapprox(vsol.coefficients_covariance, Σ_exact; rtol = 1e-8)
+    @test isapprox(vsol.fsol.coefficients, μ_exact; rtol = 1e-8)
+    @test isapprox(vsol.fsol.coefficients_covariance, Σ_exact; rtol = 1e-8)
 end
 
 # ==============================================================================
@@ -341,7 +341,7 @@ end
     bd = BoundaryData(TractionType();
         boundary_points = points,
         fields = fields,
-        outward_normals = normals,
+        normals = normals,
         interior_points = [[0.0, 0.0]]
     )
 
@@ -369,7 +369,7 @@ end
         θd = LinRange(0, 2pi, N_dense + 1)[1:N_dense]
         bd_dense = BoundaryData(TractionType();
             boundary_points = [[r * cos(θ), r * sin(θ)] for θ in θd],
-            outward_normals = [[cos(θ), sin(θ)] for θ in θd],
+            normals = [[cos(θ), sin(θ)] for θ in θd],
             interior_points = [[0.0, 0.0]]
         )
         sources = source_positions(bd_dense; relative_source_distance = 2.0)
@@ -408,7 +408,7 @@ end
         bd_small = BoundaryData(TractionType();
             boundary_points = points_small,
             fields = fields_small,
-            outward_normals = [[cos(θ), sin(θ)] for θ in θsmall],
+            normals = [[cos(θ), sin(θ)] for θ in θsmall],
             interior_points = [[0.0, 0.0]]
         )
 
@@ -460,7 +460,7 @@ end
     bd = BoundaryData(TractionType();
         boundary_points = points,
         fields = fields,
-        outward_normals = normals,
+        normals = normals,
         interior_points = [[0.0, 0.0]]
     )
 
@@ -543,7 +543,7 @@ end
     bd = BoundaryData(TractionType();
         boundary_points = points,
         fields = fields,
-        outward_normals = normals
+        normals = normals
     )
 
     # built-in initializer, applied to a denser sampling of the same boundary so that
@@ -551,7 +551,7 @@ end
     points_dense, normals_dense = rectangle_boundary(25)
     bd_dense = BoundaryData(TractionType();
         boundary_points = points_dense,
-        outward_normals = normals_dense
+        normals = normals_dense
     )
     sources = source_positions(bd_dense; relative_source_distance = 1.24)
     @test length(sources) > length(points)   # more sources than measurements

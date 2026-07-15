@@ -95,7 +95,7 @@ points_distribution = MvNormal(points_flat, Σ_points)
 bd = BoundaryData(TractionType(); 
     boundary_points = points_distribution, 
     fields = field_distribution,  # Statistical distribution passed here
-    #outward_normals = normals
+    #normals = normals
 )
 
 solver_bayesian = BayesianSolver(
@@ -123,7 +123,7 @@ fsol = solve(sim)
 bd_plot = BoundaryData(TractionType(); 
     boundary_points = points, 
     fields = field_distribution,  # Statistical distribution passed here
-    #outward_normals = normals
+    #normals = normals
 )
 
 

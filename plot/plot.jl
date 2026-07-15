@@ -1,16 +1,16 @@
-# recipe for plotting a BoundaryData. Assumes 2D boundary points. The boundary points and
-# the fields may each be a plain vector of vectors, a single `MvNormal` over the flattened
+# recipe for plotting a BoundaryShape. Assumes 2D boundary points. The boundary points and
+# the normals may each be a plain vector of vectors, a single `MvNormal` over the flattened
 # values, or a vector of `MvNormal`s (one per point); the mean is plotted, and when the
 # boundary points carry a covariance it is drawn as position error bars.
-@recipe function plot(cloud::BoundaryData{F, Dim}; fields = false, outward_normals = true, interior_points = true) where {F, Dim}
+@recipe function plot(shape::BoundaryShape{Dim}; normals = true, interior_points = true) where Dim
     # Set default attributes
     markershape --> :circle
     legend --> false
     aspect_ratio --> 1.0
 
-    bs = struct_points(cloud.boundary_points, Dim)
-    ns = cloud.outward_normals
-    is = cloud.interior_points
+    bs = mean_points(shape)
+    ns = mean_normals(shape)
+    is = shape.interior_points
 
     # used to determine the length to plot the vectors
     lengthscale = mean([norm(b - mean(bs)) for b in bs])
@@ -21,7 +21,7 @@
     iy = [b[2] for b in is]
 
     # position uncertainty: the per-point standard deviations from the boundary covariance
-    Σx = cov(cloud.boundary_points)
+    Σx = cov(shape.boundary_points)
     point_std = Σx isa UniformScaling ? nothing : sqrt.(max.(diag(Σx), 0.0))
 
     @series begin
@@ -44,7 +44,7 @@
     end
     end
 
-    if outward_normals
+    if normals
         nx = [b[1] for b in ns] .* (lengthscale / 4)
         ny = [b[2] for b in ns] .* (lengthscale / 4)
         # fallback: repeat or zero-length normals
@@ -62,10 +62,22 @@
             (bx, by)
         end
     end
+end
+
+# recipe for plotting a BoundaryData: its BoundaryShape, plus (with fields = true) a quiver
+# of the mean field. Keywords of the BoundaryShape recipe (normals, interior_points) pass
+# through.
+@recipe function plot(cloud::BoundaryData; fields = false)
+    legend --> false
+    aspect_ratio --> 1.0
+
+    @series cloud.boundary_shape
 
     # quiver of the mean field, for vector-valued fields only (a scalar field has no
     # direction to draw)
     if fields
+        bs = mean_points(cloud)
+        lengthscale = mean([norm(b - mean(bs)) for b in bs])
         fmean = flat_fields(cloud.fields)
         FD = length(fmean) ÷ length(bs)
         if FD >= 2
@@ -80,7 +92,7 @@
                 quiver --> (fx, fy)
                 marker = :none           # remove marker symbol at arrow tips
                 markersize --> 0.0          # fallback to ensure no marker is drawn
-                (bx, by)
+                ([b[1] for b in bs], [b[2] for b in bs])
             end
         end
     end

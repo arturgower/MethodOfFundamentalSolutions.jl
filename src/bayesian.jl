@@ -11,10 +11,10 @@ function extract_bayesian_components(sim)
     # Extract Covariances using the helper functions
     Σ_a = cov(prior)
     Σ_sensor = cov(bd.fields)
-    Σ_x = cov(bd.boundary_points)
-    
+    Σ_x = cov(bd.boundary_shape.boundary_points)
+
     # Extract Flat Vectors using the helper functions
-    xb_flat = flat_points(bd.boundary_points)
+    xb_flat = flat_points(bd.boundary_shape.boundary_points)
     source_positions = vcat(sim.source_positions...)
     
     # Calculate effective measurement vector 'g'
@@ -78,6 +78,15 @@ function geometric_covariance(
         # This gives system_matrix the exact heap-allocated Vector it demands.
         xb_structured = Vector(reinterpret(SVector{2, eltype(xb_flat)}, xb_flat))
 
+        # a BoundaryData sharing everything with the nominal one except the (perturbed)
+        # boundary points, which stay aliased to xb_structured
+        bd0 = sim.boundary_data
+        shape0 = bd0.boundary_shape
+        bd_perturbed = BoundaryData(bd0.fieldtype,
+            BoundaryShape(xb_structured, shape0.normals, shape0.interior_points),
+            bd0.fields
+        )
+
         for v in 1:n_xb
             # 2. Map the flat index (v) to the SVector index (s_idx) and the coordinate (x=1, y=2)
             s_idx = div(v - 1, 2) + 1
@@ -94,8 +103,7 @@ function geometric_covariance(
                 xb_structured[s_idx] = SVector(orig_svec[1], orig_svec[2] + h)
             end
             
-            bd_fw = BoundaryData(sim.boundary_data.fieldtype; boundary_points = xb_structured, fields = sim.boundary_data.fields,outward_normals = sim.boundary_data.outward_normals, interior_points = sim.boundary_data.interior_points)
-            M_fw = system_matrix(structured_chi, sim.medium, bd_fw)
+            M_fw = system_matrix(structured_chi, sim.medium, bd_perturbed)
             
             # --- Backward Step ---
             if coord == 1
@@ -104,8 +112,7 @@ function geometric_covariance(
                 xb_structured[s_idx] = SVector(orig_svec[1], orig_svec[2] - h)
             end
             
-            bd_bw = BoundaryData(sim.boundary_data.fieldtype; boundary_points = xb_structured, fields = sim.boundary_data.fields,outward_normals = sim.boundary_data.outward_normals, interior_points = sim.boundary_data.interior_points)
-            M_bw = system_matrix(structured_chi, sim.medium, bd_bw)
+            M_bw = system_matrix(structured_chi, sim.medium, bd_perturbed)
             
             # --- Reset ---
             # Put the original SVector back before moving to the next coordinate

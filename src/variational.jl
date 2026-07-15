@@ -111,13 +111,20 @@ VariationalBayesianSolver(prior::ContinuousMultivariateDistribution; kws...) =
 
 Result of `solve` with a [`VariationalBayesianSolver`](@ref).
 
+All the information about the coefficients lives in `fsol`, and all the information about
+the boundary lives in `boundary_shape`.
+
 # Fields
-- `fsol::FundamentalSolution`: the posterior-mean solution at the learned source positions;
-  use it with `field`, `field_covariance` and `field_std` (which also accept the
-  `VariationalSolution` directly). For complex problems its coefficients are complex and the
-  posterior covariance is only stored below, in the real `[Re; Im]` stacking.
-- `coefficients_mean`, `coefficients_covariance`: the coefficient posterior
-  q(a) = N(μ_post, Σ_post) over the retained (real) degrees of freedom.
+- `fsol::FundamentalSolution`: the coefficient posterior q(a) = N(μ_post, Σ_post) at the
+  learned source positions: `fsol.coefficients` is the posterior mean and
+  `fsol.coefficients_covariance` the posterior covariance over the retained degrees of
+  freedom. Use it with `field`, `field_covariance` and `field_std` (which also accept the
+  `VariationalSolution` directly). For complex problems the coefficients are complex and
+  the posterior covariance is not propagated (`0.0 * I`).
+- `boundary_shape::BoundaryShape`: the posterior of the boundary. When the geometry was
+  updated (`update_geometry_flag`) its `boundary_points` is an `MvNormal` whose mean is the
+  re-centered boundary and whose covariance is the posterior covariance Σ_δx; otherwise it
+  is the boundary shape of the input `BoundaryData`, unchanged.
 - `prior_precisions`: the learned ARD precisions αᵢ of the retained coefficients.
 - `elbo_history`: the evidence lower bound F after each iteration.
 - `baseline_resets`: iterations at which the model changed significantly (source pruning or
@@ -127,20 +134,15 @@ Result of `solve` with a [`VariationalBayesianSolver`](@ref).
   problems the change of F across a small re-centering is negligible.
 - `misfit_ratio`: the noise-weighted expected misfit R/N_g of eq. (R); ≈ 1 at convergence
   when the model is consistent with the known noise level.
-- `boundary_points`, `boundary_covariance`: posterior of the boundary (only when the
-  geometry was updated, otherwise `nothing`).
 """
-struct VariationalSolution{FS <: FundamentalSolution, T <: Real}
+struct VariationalSolution{FS <: FundamentalSolution, BS <: BoundaryShape, T <: Real}
     fsol::FS
-    coefficients_mean::Vector{T}
-    coefficients_covariance::Matrix{T}
+    boundary_shape::BS
     prior_precisions::Vector{T}
     elbo_history::Vector{T}
     baseline_resets::Vector{Int}
     recenter_iterations::Vector{Int}
     misfit_ratio::T
-    boundary_points::Union{Nothing, Vector{SVector{2, T}}}
-    boundary_covariance::Union{Nothing, Matrix{T}}
 end
 
 field(ft::FieldType, vsol::VariationalSolution, x::AbstractVector, outward_normal::AbstractVector = ones(x |> length)) =
@@ -160,7 +162,7 @@ overcomplete initialization for a [`VariationalBayesianSolver`](@ref), whose aut
 relevance determination then switches off the unnecessary sources.
 """
 function grid_source_positions(bd::BoundaryData{F, 2}; n::Int = 15, scale::Real = 2.0, clearance::Real = 1.0) where F
-    pts = struct_points(bd.boundary_points, 2)
+    pts = mean_points(bd)
     len = length(pts)
 
     xs = [p[1] for p in pts]; ys = [p[2] for p in pts]
@@ -387,16 +389,15 @@ end
 # Re-center the boundary at the current estimate: μ_x ← μ_x + μ_δx (Algorithm 1, line 6).
 # The outward normals are kept fixed, consistent with small perturbations.
 function _recenter_boundary(bd::BoundaryData, μδx::AbstractVector, Dim::Int)
-    pts = struct_points(bd.boundary_points, Dim)
+    pts = mean_points(bd)
     newpts = [
         pts[i] + SVector{Dim, Float64}(ntuple(d -> μδx[(i - 1) * Dim + d], Dim))
     for i in eachindex(pts)]
 
-    return BoundaryData(bd.fieldtype;
-        boundary_points = newpts,
-        fields = bd.fields,
-        outward_normals = bd.outward_normals,
-        interior_points = bd.interior_points
+    shape = bd.boundary_shape
+    return BoundaryData(bd.fieldtype,
+        BoundaryShape(newpts, shape.normals, shape.interior_points),
+        bd.fields
     )
 end
 
@@ -496,7 +497,7 @@ function solve(sim::Simulation{VariationalBayesianSolver, Dim}) where Dim
     end
 
     # --- geometry prior Σ_x (diagonal) ---
-    Σx_raw = cov(bd.boundary_points)
+    Σx_raw = cov(bd.boundary_shape.boundary_points)
     do_geometry = solver.update_geometry_flag && !(Σx_raw isa UniformScaling)
     if do_geometry && iscomplex
         throw(ArgumentError("geometry updates are not implemented for complex-valued problems"))
@@ -507,7 +508,7 @@ function solve(sim::Simulation{VariationalBayesianSolver, Dim}) where Dim
     sx2 = do_geometry ? Vector{Float64}(diag(Σx_raw)) : nothing
 
     bd_current = bd
-    n_sensors = length(struct_points(bd.boundary_points, Dim))
+    n_sensors = length(mean_points(bd))
     d_m = size(M0, 1) ÷ n_sensors
 
     # --- initial prior precisions and model matrix ---
@@ -525,7 +526,7 @@ function solve(sim::Simulation{VariationalBayesianSolver, Dim}) where Dim
     μδx = do_geometry ? zeros(length(sx2)) : nothing
     # prior mean of δx relative to the current linearization point: the prior of the
     # boundary stays anchored at the original nominal boundary μ_x0 across re-centerings
-    x_nominal = do_geometry ? Vector{Float64}(vcat(struct_points(bd.boundary_points, Dim)...)) : nothing
+    x_nominal = do_geometry ? Vector{Float64}(vcat(mean_points(bd)...)) : nothing
     m0 = do_geometry ? zeros(length(sx2)) : nothing
     Γ = do_geometry ? _gamma(gradM, Σδx, w, d_m, K) : nothing
 
@@ -553,7 +554,7 @@ function solve(sim::Simulation{VariationalBayesianSolver, Dim}) where Dim
                 M = _stacked_system_matrix(src_pos, medium, bd_current, iscomplex)
                 gradM = system_matrix_gradient(src_pos, medium, bd_current)
                 μδx = zero(μδx)
-                m0 = x_nominal - Vector{Float64}(vcat(struct_points(bd_current.boundary_points, Dim)...))
+                m0 = x_nominal - Vector{Float64}(vcat(mean_points(bd_current)...))
                 push!(recenter_iterations, it)
                 # only a significant move of the linearization point counts as a model
                 # change, across which values of the bound are not comparable
@@ -669,11 +670,21 @@ function solve(sim::Simulation{VariationalBayesianSolver, Dim}) where Dim
         relative_boundary_error = relative_boundary_error
     )
 
-    boundary_points = do_geometry ? struct_points(bd_current.boundary_points, Dim) : nothing
-    boundary_covariance = do_geometry ? Σδx : nothing
+    # all the boundary information is returned as a BoundaryShape: when the geometry was
+    # updated, the posterior of the boundary points is an MvNormal with the re-centered
+    # boundary as mean and Σ_δx as covariance; otherwise the input shape is passed through
+    boundary_shape = if do_geometry
+        shape = bd_current.boundary_shape
+        posterior_points = MvNormal(
+            Vector{Float64}(vcat(mean_points(bd_current)...)),
+            Symmetric(Σδx)
+        )
+        BoundaryShape(posterior_points, shape.normals, shape.interior_points)
+    else
+        bd.boundary_shape
+    end
 
     return VariationalSolution(
-        fsol, μ, Σpost, α, elbo_history, baseline_resets, recenter_iterations, misfit_ratio,
-        boundary_points, boundary_covariance
+        fsol, boundary_shape, α, elbo_history, baseline_resets, recenter_iterations, misfit_ratio
     )
 end

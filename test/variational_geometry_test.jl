@@ -65,7 +65,7 @@ end
         bd = BoundaryData(DirichletType();
             boundary_points = MvNormal(vcat(Vector.(x_nom)...), σx^2 * I(2n_bd)),
             fields = [MvNormal([gi], σ_noise^2 * I(1)) for gi in g],
-            outward_normals = normals,
+            normals = normals,
             interior_points = [[0.0, 0.0]]
         )
         solver = VariationalBayesianSolver(
@@ -81,7 +81,7 @@ end
 
     coordinate_error(xs, x_true, c) = norm([xs[i][c] - x_true[i][c] for i in eachindex(x_true)])
     # mean posterior standard deviation of the boundary coordinate c = 1 (x) or 2 (y)
-    boundary_std(vsol, c) = mean(sqrt.(diag(vsol.boundary_covariance)[c:2:end]))
+    boundary_std(vsol, c) = mean(sqrt.(diag(cov(vsol.boundary_shape.boundary_points))[c:2:end]))
 
     # ==========================================================================
     # Works: rough sensor shifts along the field gradient. The true field is
@@ -96,7 +96,7 @@ end
         g = [p[1] + σ_noise * randn() for p in x_true_circle]   # u = x at the true points
 
         vsol = solve_laplace_geometry(x_nom, g, σx)
-        x_est = vsol.boundary_points
+        x_est = mean_points(vsol.boundary_shape)
 
         err_nom = coordinate_error(x_nom, x_true_circle, 1)
         err_est = coordinate_error(x_est, x_true_circle, 1)
@@ -122,7 +122,7 @@ end
         g = [p[1] + σ_noise * randn() for p in x_true_circle]
 
         vsol = solve_laplace_geometry(x_nom, g, σx)
-        x_est = vsol.boundary_points
+        x_est = mean_points(vsol.boundary_shape)
 
         err_nom = coordinate_error(x_nom, x_true_circle, 1)
         err_est = coordinate_error(x_est, x_true_circle, 1)
@@ -145,7 +145,7 @@ end
         g = [p[1] + σ_noise * randn() for p in x_true_circle]
 
         vsol = solve_laplace_geometry(x_nom, g, σx)
-        x_est = vsol.boundary_points
+        x_est = mean_points(vsol.boundary_shape)
 
         err_nom = coordinate_error(x_nom, x_true_circle, 2)
         err_est = coordinate_error(x_est, x_true_circle, 2)
@@ -178,7 +178,7 @@ end
 
         vsol = solve_laplace_geometry(x_nom, g, σx_big)
 
-        @test total_error(vsol.boundary_points) > 0.7 * total_error(x_nom)  # not recovered
+        @test total_error(mean_points(vsol.boundary_shape)) > 0.7 * total_error(x_nom)  # not recovered
         # overconfidence: the reported uncertainty shrinks although the estimate is wrong
         @test boundary_std(vsol, 1) < 0.5 * σx_big
         @test geometry_elbo_is_monotone(vsol)
@@ -190,7 +190,7 @@ end
 
         vsol_small = solve_laplace_geometry(x_nom_small, g, σx_small)
 
-        @test total_error(vsol_small.boundary_points) < 0.95 * total_error(x_nom_small)
+        @test total_error(mean_points(vsol_small.boundary_shape)) < 0.95 * total_error(x_nom_small)
         @test geometry_elbo_is_monotone(vsol_small)
     end
 
@@ -214,7 +214,7 @@ end
         bd = BoundaryData(TractionType();
             boundary_points = MvNormal(vcat(Vector.(x_nom)...), σx^2 * I(2n_bd)),
             fields = [MvNormal(gi, σ_noise_e^2 * I(2)) for gi in g],
-            outward_normals = normals,
+            normals = normals,
             interior_points = [[0.0, 0.0]]
         )
         solver = VariationalBayesianSolver(
@@ -226,7 +226,7 @@ end
         )
         sim = Simulation(medium, bd; solver = solver, source_positions = sources)
         vsol = solve(sim)
-        x_est = vsol.boundary_points
+        x_est = mean_points(vsol.boundary_shape)
 
         radial_error(xs) = norm([dot(xs[i] - x_true_e[i], SVector(cos(θs[i]), sin(θs[i]))) for i in 1:n_bd])
 

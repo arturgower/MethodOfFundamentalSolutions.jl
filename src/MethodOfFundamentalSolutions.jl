@@ -19,8 +19,8 @@ import Statistics: mean
 using RecipesBase
 
 
-export BoundaryData  # types
-export compute_outward_normals, points_in_shape
+export BoundaryShape, BoundaryData  # types
+export compute_outward_normals, points_in_shape, mean_points, mean_normals
 include("boundarydata.jl")
 
 export interior_points_along_coordinate
