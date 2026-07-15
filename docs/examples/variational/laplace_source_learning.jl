@@ -54,14 +54,14 @@ bd = BoundaryData(FT;
     fields = [MvNormal([field_mean(x)], field_var(x) * I(1)) for x in points]
 )
 
-# bd = BoundaryData(FT; boundary_points = points) # used just for the system_matrix dispatch
-
-# M = system_matrix([SVector{2, Float64}(p) for p in source_pos], medium, bd)
-# Σ_induced = Symmetric(M * Diagonal(source_vars) * M' + 1e-9 * I)
-# bd = BoundaryData(FT;
-#     boundary_points = points,
-#     fields = MvNormal(field_mean.(points), Σ_induced)
-# )
+## Below uses the exact induced error covariance matrix. When using it the source positions do not change. 
+    # bd = BoundaryData(FT; boundary_points = points) # used just for the system_matrix dispatch
+    # M = system_matrix([SVector{2, Float64}(p) for p in source_pos], medium, bd)
+    # Σ_induced = Symmetric(M * Diagonal(source_vars) * M' + 1e-9 * I)
+    # bd = BoundaryData(FT;
+    #     boundary_points = points,
+    #     fields = MvNormal(field_mean.(points), Σ_induced)
+    # )
 
 # ------------------------------------------------------------------ candidate sources
 N_dense = 60
@@ -108,7 +108,7 @@ end
 function frame(vsol, k)
     plt = plot(vsol, bd;
         xres = res, yres = res,
-        c = :amp, clims = clims, colorbar_title = "field", legend = true,
+        c = :inferno, clims = clims, colorbar_title = "field", legend = true,
         xlims = plotlims, ylims = plotlims,
         title = "iteration $k:  $(length(vsol.fsol.positions)) of $N_dense sources",
         titlefontsize = 11, size = (620, 560), background_color = :white
