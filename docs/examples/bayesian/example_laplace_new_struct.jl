@@ -91,7 +91,6 @@ sim = Simulation(
     solver =solver,
     source_positions = init_source_positions,
     particular_solution = NoParticularSolution(),
-    ω = 2pi * 1.0
 )
 
 sol = solve(sim)
@@ -153,7 +152,6 @@ sim_2 = Simulation(
     solver =solver_2,
     source_positions = init_source_positions,
     particular_solution = NoParticularSolution(),
-    ω = 2pi * 1.0
 )
 
 

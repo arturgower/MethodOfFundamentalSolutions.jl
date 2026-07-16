@@ -404,6 +404,10 @@ end
         sim = Simulation(medium, bd; solver = solver, source_positions = sources)
         vsol = solve(sim)
 
+        # using Plots
+        # plot(sim)
+        # plot!(vsol; boundary_points = true, source_positions = true)
+
         @test relative_prediction_error(vsol) < 0.05
         @test length(vsol.fsol.positions) < length(sources)
         @test elbo_is_monotone(vsol)
@@ -439,6 +443,11 @@ end
         )
         sim = Simulation(medium, bd_small; solver = solver_chi, source_positions = sources)
         vsol = solve(sim)
+
+        # using Plots
+        # plot(sim)
+        # plot!(vsol; boundary_points = true, source_positions = true)
+        # # plot(vsol, bd_small)
 
         @test relative_prediction_error(vsol) < 0.1
         @test elbo_is_monotone(vsol)

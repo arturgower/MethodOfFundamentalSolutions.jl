@@ -78,63 +78,56 @@ struct TikhonovSolver{T<:Real} <: AbstractSolver
 end
 
 """
-    BayesianSolver{P} <: AbstractSolver
+    Simulation{S,Dim,P,PS,BD}
 
-Bayesian solver for MFS.
+An MFS problem: a `medium`, the `boundary_data` to be matched, a `solver`, and the MFS
+`source_positions` (the columns of the system matrix). The angular frequency ω is taken
+from the `medium`, not stored separately.
 
-# Parameters
-- `prior::P`: The prior distribution for the solution
-- `options::SolverOptions`: the options shared with the other solvers, see
-  [`SolverOptions`](@ref); the keyword constructor accepts them as keywords directly.
-The solution is the posterior distribution over the coefficients given the boundary data and the prior.
+`boundary_data` may be a single [`BoundaryData`](@ref), or a `Tuple` of `BoundaryData` that
+share the same `source_positions` but impose different boundary conditions on (possibly)
+different points — e.g. traction on part of the boundary and displacement on another. Each
+`BoundaryData` in the tuple contributes its own block of rows to the system matrix, stacked
+in the order given.
 """
-struct BayesianSolver{P<:ContinuousMultivariateDistribution} <: AbstractSolver
-    prior::P
-    options::SolverOptions
-    gradient_tol::Float64
-    objective_function_tol::Float64
-end
-
-function BayesianSolver(
-    prior::ContinuousMultivariateDistribution;
-    optimise_source_positions_flag::Bool = false,
-    use_greens_gradient_analytical_flag::Bool = true,
-    gradient_tol::Float64 = 1e-3,
-    objective_function_tol::Float64 = 1e-4,
-    max_iters::Int = 50
-)
-    options = SolverOptions(;
-        optimise_source_positions_flag = optimise_source_positions_flag,
-        use_greens_gradient_analytical_flag = use_greens_gradient_analytical_flag,
-        max_iters = max_iters
-    )
-    return BayesianSolver{typeof(prior)}(prior, options, gradient_tol, objective_function_tol)
-end
-
-struct Simulation{S <: AbstractSolver, Dim, P<:PhysicalMedium{Dim}, PS <:ParticularSolution, BD <: BoundaryData}
+struct Simulation{S <: AbstractSolver, Dim, P<:PhysicalMedium{Dim}, PS <:ParticularSolution, BD}
     solver::S
     medium::P
     boundary_data::BD
     particular_solution::PS
     source_positions::Vector{SVector{Dim,Float64}}
-    ω::Float64
 end
 
-function Simulation(medium::P, bd::BD; 
-        solver::S = TikhonovSolver(),
-        particular_solution::PS = NoParticularSolution(),
-        source_positions = source_positions(bd; relative_source_distance = 1.2),
-        ω::Float64 = 2pi * 1.0 
-    ) where {
-        S <: AbstractSolver, Dim, 
-        P <: PhysicalMedium{Dim}, PS <: ParticularSolution, 
-        BD <: BoundaryData{<:FieldType,Dim}
-    }
+# treat a lone BoundaryData as a one-element tuple so the assembly code is written once
+_as_tuple(bd::BoundaryData) = (bd,)
+_as_tuple(bds::Tuple) = bds
 
-    return Simulation{S,Dim,P,PS,BD}(solver, medium, bd, particular_solution, source_positions, ω)
+function Simulation(medium::P, bd::BoundaryData{<:FieldType,Dim};
+        solver::AbstractSolver = TikhonovSolver(),
+        particular_solution::ParticularSolution = NoParticularSolution(),
+        source_positions = source_positions(bd; relative_source_distance = 1.2),
+    ) where {Dim, P <: PhysicalMedium{Dim}}
+
+    sp = [SVector{Dim, Float64}(p) for p in source_positions]
+    return Simulation(solver, medium, bd, particular_solution, sp)
+end
+
+function Simulation(medium::P, bds::Tuple{Vararg{BoundaryData{<:FieldType,Dim}}};
+        solver::AbstractSolver = TikhonovSolver(),
+        particular_solution::ParticularSolution = NoParticularSolution(),
+        source_positions = source_positions(bds; relative_source_distance = 1.2),
+    ) where {Dim, P <: PhysicalMedium{Dim}}
+
+    sp = [SVector{Dim, Float64}(p) for p in source_positions]
+    return Simulation(solver, medium, bds, particular_solution, sp)
 end
 
 system_matrix(sim::Simulation) = system_matrix(sim.source_positions, sim.medium, sim.boundary_data)
+
+# a tuple of BoundaryData stacks its blocks vertically; all blocks share the same columns
+function system_matrix(source_pos::AbstractVector{<:SVector}, medium::PhysicalMedium, bds::Tuple)
+    return reduce(vcat, map(bd -> system_matrix(source_pos, medium, bd), bds))
+end
 
 function system_matrix(
     source_pos::AbstractVector{<:SVector{Dim}}, 
@@ -158,7 +151,7 @@ function system_matrix(
             normal_vec = SVector{Dim, NumType}(normals[i])
             
             # 4. Call greens. Now r_vec and normal_vec share the exact same type!
-            greens(bd.fieldtype, medium, r_vec, normal_vec)    
+            greens(bd.fieldtype, medium, r_vec, normal_vec)
         end
         for i in eachindex(points), x in source_pos
     ]
@@ -233,70 +226,63 @@ end
 
 system_matrix_gradient(sim::Simulation) = system_matrix_gradient(sim.source_positions, sim.medium, sim.boundary_data)
 
+# a tuple of BoundaryData stacks its gradient blocks along the row dimension
+function system_matrix_gradient(source_pos::AbstractVector{<:SVector}, medium::PhysicalMedium, bds::Tuple)
+    blocks = map(bd -> system_matrix_gradient(source_pos, medium, bd), bds)
+    return reduce((a, b) -> cat(a, b; dims = 1), blocks)
+end
+
 function solve(medium::P, bd::BoundaryData; kwargs... ) where P <: PhysicalMedium
     sim = Simulation(medium, bd; kwargs...)
     return solve(sim)
+end
+
+"""
+    boundary_forcing(sim::Simulation)
+
+The right-hand side that `sim`'s fundamental solution must match on the boundary: the
+(flattened) boundary `fields` minus the contribution of the `particular_solution`. For a
+tuple `boundary_data` the blocks are stacked in the same order as [`system_matrix`](@ref).
+"""
+function boundary_forcing(sim::Simulation)
+    bds = _as_tuple(sim.boundary_data)
+    fields = reduce(vcat, map(bd -> flat_fields(bd.fields), bds))
+    particular = reduce(vcat,
+        map(bd -> vcat(field(sim.medium, bd, sim.particular_solution)...), bds))
+    return fields - particular
+end
+
+# Regularised least-squares solve of `M * coes = forcing`, shared by the single-domain and
+# transmission solvers. Returns the coefficients, the relative boundary error and cond(M).
+function tikhonov_solve(M::AbstractMatrix, forcing::AbstractVector, solver::TikhonovSolver)
+    condM = cond(M)
+    sqrtλ = solver.λ < zero(eltype(solver.λ)) ?
+        condM * sqrt(solver.tolerance) :
+        sqrt(solver.λ)
+
+    bigM = [M; sqrtλ * I]
+    coes = bigM \ [forcing; zeros(size(M)[2])]
+
+    relative_error = norm(M * coes - forcing) / norm(forcing)
+
+    return coes, relative_error, condM
 end
 
 # Implement Tikhonov solver
 function solve(sim::Simulation{TikhonovSolver{T}}) where T
 
     M = system_matrix(sim)
+    forcing = boundary_forcing(sim)
 
-    forcing = flat_fields(sim.boundary_data.fields)
-    forcing_particular = field(sim.medium, sim.boundary_data, sim.particular_solution)
-    forcing = forcing - vcat(forcing_particular...)
-    
-    # Tikinov solution
-    condM = cond(M)
-    sqrtλ = if sim.solver.λ < zero(eltype(sim.solver.λ)) 
-        condM * sqrt(sim.solver.tolerance)
-    else sqrt(sim.solver.λ)
-    end
-
-    bigM = [M; sqrtλ * I];
-    coes = bigM \ [forcing; zeros(size(M)[2])]
-
-    relative_error = norm(M * coes - forcing) / norm(forcing)
+    coes, relative_error, condM = tikhonov_solve(M, forcing, sim.solver)
 
     @info "Solved the system with condition number $(condM), and with a relative error of the boundary data of $(relative_error), using the tolerance $(sim.solver.tolerance)"
 
-    return FundamentalSolution(sim.medium; 
+    return FundamentalSolution(sim.medium;
         positions = sim.source_positions,
-        coefficients = coes, 
+        coefficients = coes,
         particular_solution = sim.particular_solution,
         relative_boundary_error = relative_error
-    )
-end
-
-function solve(
-    sim::Simulation{<:BayesianSolver{<:AbstractMvNormal}, Dim}
-    ) where {Dim}
-    
-    # 1. Determine Source Positions (chi)
-    if sim.solver.options.optimise_source_positions_flag
-        @info "Optimizing source positions..."
-        best_source_positions = optimise_source_positions(sim)
-    else
-        best_source_positions = vcat(sim.source_positions...)
-    end
-
-    # 2. Compute Posterior Coefficients
-    μ_post, Σ_post = compute_coefficient_posterior(
-            sim, best_source_positions
-        )
-    
-    new_source_positions = [
-    SVector{Dim, Float64}(best_source_positions[i : i + Dim - 1]) 
-    for i in 1:Dim:length(best_source_positions)
-    ]
-    # 3. Return the solution
-    return FundamentalSolution(
-        sim.medium; 
-        positions = new_source_positions,
-        coefficients = μ_post, 
-        coefficients_covariance = Σ_post,
-        particular_solution = sim.particular_solution
     )
 end
 
@@ -330,4 +316,29 @@ function source_positions(cloud::Union{BoundaryShape, BoundaryData}; relative_so
 
     # Occasionally the normal direction is wrong. In which case, do not add a source inside the body!
     return filter(p -> p ∉ cloud, positions)
+end
+
+"""
+    source_positions(bds::Tuple; relative_source_distance = 1.0)
+
+Source positions shared by a tuple of [`BoundaryData`](@ref). The boundary conditions in
+`bds` all use the same MFS sources (columns), so the sources are placed relative to the
+union of their boundaries. See the single-argument [`source_positions`](@ref).
+"""
+function source_positions(bds::Tuple{Vararg{Union{BoundaryShape, BoundaryData}}}; relative_source_distance = 1.0)
+
+    _interior(bd::BoundaryData) = bd.boundary_shape.interior_points
+    _interior(shape::BoundaryShape) = shape.interior_points
+
+    points = reduce(vcat, map(mean_points, bds))
+    normals = reduce(vcat, map(mean_normals, bds))
+    interiors = reduce(vcat, map(_interior, bds))
+
+    combined = BoundaryShape(
+        boundary_points = points,
+        normals = normals,
+        interior_points = interiors
+    )
+
+    return source_positions(combined; relative_source_distance = relative_source_distance)
 end

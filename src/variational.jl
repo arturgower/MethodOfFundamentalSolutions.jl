@@ -12,6 +12,16 @@
 # Complex-valued problems (e.g. acoustics) are handled by stacking real and imaginary
 # parts: g̃ = [Re g; Im g], M̃ = [Re M  -Im M; Im M  Re M], ã = [Re a; Im a], so that the
 # whole algorithm runs on a real linear-Gaussian model.
+#
+# The basis is assumed overcomplete: more coefficients K than data rows Nr, as in the
+# intended use with `grid_source_positions`, where automatic relevance determination prunes
+# an initially redundant set of sources. Every posterior is therefore evaluated in the
+# data-sized form of eqs. (posterior_mean_woodbury)-(posterior_covariance_woodbury) rather
+# than the coefficient-sized eqs. (posterior_mean)-(posterior_covariance): the K × K
+# precision M̄ᵀ Σ⁻¹ M̄ + Γ + diag α is never formed or factorized, and the only Cholesky is
+# of a P × P matrix with P = Nr (fixed geometry) or P = Nr(1 + Dim) (geometry updates).
+# For this to pay off the extra precision Γ is kept in its factored form Γ = VᵀV, which is
+# also how it enters the data-sized posterior.
 
 """
     VariationalBayesianSolver <: AbstractSolver
@@ -280,35 +290,55 @@ _apply_precision(w::AbstractMatrix, X) = w * X
 
 const NoisePrecision = Union{AbstractVector, AbstractMatrix}
 
+# Cholesky of a symmetric positive definite matrix, retried with a small diagonal jitter when
+# round-off makes the factorization fail.
+function _safe_cholesky(A::AbstractMatrix)
+    S = Symmetric(Matrix(A))
+    C = cholesky(S; check = false)
+    issuccess(C) && return C
+    jitter = 1e-12 * max(1.0, maximum(abs, diag(S)))
+    return cholesky(Symmetric(S + jitter * I))
+end
+
+# A left square root W of the measurement-noise precision, so that Σ⁻¹ = WᵀW and hence
+# M̄ᵀ Σ⁻¹ M̄ = (W M̄)ᵀ (W M̄): the whitened model matrix is what the data-sized posterior needs.
+_whitener(w::AbstractVector) = Diagonal(sqrt.(w))
+_whitener(w::AbstractMatrix) = Matrix(transpose(_safe_cholesky(w).L))
+
 # E-step I, eq. (vb_coefficient_update): q(a) = N(μ_post, Σ_post) with
 # Σ_post = (M̄ᵀ Σ⁻¹ M̄ + Γ + diag α)⁻¹ and μ_post = Σ_post M̄ᵀ Σ⁻¹ g.
-function _coefficient_posterior(M::AbstractMatrix, Γ, α::AbstractVector, w::NoisePrecision, g::AbstractVector)
-    H = Matrix(M' * _apply_precision(w, M))
-    Γ === nothing || (H .+= Γ)
-    @inbounds for i in eachindex(α)
-        H[i, i] += α[i]
-    end
+#
+# Since there are more coefficients than data, this is evaluated in the data-sized Woodbury
+# form of eq. (posterior_covariance_woodbury). Stacking the whitened model matrix on the
+# factor V of Γ = VᵀV gives the augmented design Φ = [W M̄; V] with Φᵀ Φ = M̄ᵀ Σ⁻¹ M̄ + Γ, so
+# that with the diagonal prior A = diag α,
+#   Σ_post = A⁻¹ - A⁻¹Φᵀ (I + Φ A⁻¹ Φᵀ)⁻¹ Φ A⁻¹,   log|Σ_post| = -log|I + Φ A⁻¹ Φᵀ| - Σᵢ log αᵢ
+# (the log-determinant by the matrix determinant lemma). The only factorization is of the
+# P × P matrix I + Φ A⁻¹ Φᵀ, P being the number of rows of Φ.
+function _coefficient_posterior(M::AbstractMatrix, Vγ, α::AbstractVector, W::AbstractMatrix, g::AbstractVector)
+    Mw = W * M
+    Φ = Vγ === nothing ? Mw : vcat(Mw, Vγ)
 
-    C = cholesky(Symmetric(H); check = false)
-    if !issuccess(C)
-        jitter = 1e-12 * max(1.0, maximum(abs, diag(H)))
-        C = cholesky(Symmetric(H + jitter * I))
-    end
-    logdetΣ = -logdet(C)
-    Σpost = Matrix(Symmetric(inv(C)))
-    μ = Σpost * (M' * _apply_precision(w, g))
+    αinv = 1 ./ α
+    ΦA = Φ .* transpose(αinv)                                     # Φ A⁻¹, P × K
+    C = _safe_cholesky(ΦA * transpose(Φ) + I)                     # I + Φ A⁻¹ Φᵀ, P × P
+
+    Σpost = Matrix(Symmetric(Diagonal(αinv) - transpose(ΦA) * (C \ ΦA)))
+    logdetΣ = -logdet(C) - sum(log, α)
+    μ = Σpost * (transpose(Mw) * (W * g))
     return μ, Σpost, logdetΣ
 end
 
 # The noise-weighted expected misfit R of eq. (R):
 # R = E_q ‖g - M a - D(a) δx‖²_Σ⁻¹, evaluated after re-centering (μ_δx = 0), so that
 # R = (g - Mμ)ᵀΣ⁻¹(g - Mμ) + tr(Σ⁻¹ M Σ_post Mᵀ) + μᵀΓμ + tr(Γ Σ_post).
-function _expected_misfit(M::AbstractMatrix, Γ, μ::AbstractVector, Σpost::AbstractMatrix, w::NoisePrecision, g::AbstractVector)
+function _expected_misfit(M::AbstractMatrix, Vγ, μ::AbstractVector, Σpost::AbstractMatrix, w::NoisePrecision, g::AbstractVector)
     r = g - M * μ
     S = M * Σpost
     R = dot(r, _apply_precision(w, r)) + sum(_apply_precision(w, M) .* S)
-    if Γ !== nothing
-        R += dot(μ, Γ * μ) + dot(Γ, Σpost)
+    if Vγ !== nothing
+        # with Γ = VᵀV: μᵀΓμ = ‖Vμ‖² and tr(Γ Σ_post) = tr(Vᵀ V Σ_post) = Σ (V Σ_post) .* V
+        R += sum(abs2, Vγ * μ) + sum((Vγ * Σpost) .* Vγ)
     end
     return R
 end
@@ -330,24 +360,27 @@ function _elbo(R::Real, Nr::Int, noise_logdet::Real, α::AbstractVector, μ::Abs
     return F
 end
 
-# The extra coefficient precision Γ = Σ_kl Σδx^kl M_kᵀ Σ⁻¹ M_l of eq. (Gamma). Row r of M
-# depends only on the boundary point of its own sensor, so only the Dim × Dim diagonal
-# blocks of Σδx contribute.
-function _gamma(gradM::AbstractArray, Σδx::AbstractMatrix, w::AbstractVector, d_m::Int, K::Int)
-    N = size(gradM, 1)
+# The factor V of the extra coefficient precision Γ = VᵀV = Σ_kl Σδx^kl M_kᵀ Σ⁻¹ M_l of
+# eq. (Gamma). Row r of M depends only on the boundary point of its own sensor, so only the
+# Dim × Dim diagonal blocks Σδx^(i) of Σδx contribute and, with the K × Dim gradient block
+# G_r = [∂M_r/∂x_1 … ∂M_r/∂x_Dim] of data row r and its sensor i(r),
+#   Γ = Σ_r w_r G_r Σδx^(i(r)) G_rᵀ.
+# Each Σδx^(i) is a covariance, so factoring it as L_i L_iᵀ gives Γ = VᵀV with the Dim rows
+# √w_r L_i(r)ᵀ G_rᵀ of V per data row r. Γ is only ever needed through this factor, so it is
+# never formed: that keeps the coefficient posterior in its data-sized form, and costs
+# O(Nr Dim² K) instead of the O(Nr Dim² K²) of accumulating the K × K matrix.
+function _gamma_factor(gradM::AbstractArray, Σδx::AbstractMatrix, w::AbstractVector, d_m::Int)
+    N, K = size(gradM, 1), size(gradM, 2)
     Dim = size(gradM, 3)
-    Γ = zeros(K, K)
-    for r in 1:N
-        i = (r - 1) ÷ d_m + 1
-        for d in 1:Dim, d2 in 1:Dim
-            c = w[r] * Σδx[(i - 1) * Dim + d, (i - 1) * Dim + d2]
-            c == 0 && continue
-            vd = Vector(gradM[r, :, d])
-            vd2 = Vector(gradM[r, :, d2])
-            mul!(Γ, vd, transpose(vd2), c, 1.0)
+    Vγ = zeros(N * Dim, K)
+    for i in 1:(N ÷ d_m)
+        ks = ((i - 1) * Dim + 1):(i * Dim)
+        Lt = transpose(_safe_cholesky(Σδx[ks, ks]).L)
+        for r in (((i - 1) * d_m + 1):(i * d_m))
+            Vγ[((r - 1) * Dim + 1):(r * Dim), :] = sqrt(w[r]) .* (Lt * transpose(Matrix(gradM[r, :, :])))
         end
     end
-    return Matrix(Symmetric(Γ))
+    return Vγ
 end
 
 # E-step II, eqs. (vb_boundary_precision)-(vb_boundary_update): q(δx) = N(μ_δx, Σ_δx).
@@ -414,17 +447,17 @@ end
 # misfit R(χ) (eq. (R)), so minimizing R maximizes F at fixed q.
 function _chi_misfit(chiflat::AbstractVector, medium, bd, iscomplex::Bool,
         μ::AbstractVector, Σpost::AbstractMatrix, w::NoisePrecision, g::AbstractVector, Dim::Int;
-        Γ = nothing, Σδx = nothing, d_m::Int = 1
+        Vγ = nothing, Σδx = nothing, d_m::Int = 1
     )
     pos = _structured_positions(chiflat, Dim)
     M = _stacked_system_matrix(pos, medium, bd, iscomplex)
-    Γx = if Σδx === nothing
-        Γ
+    Vx = if Σδx === nothing
+        Vγ
     else
         gradM = system_matrix_gradient(pos, medium, bd)
-        _gamma(gradM, Σδx, w, d_m, size(M, 2))
+        _gamma_factor(gradM, Σδx, w, d_m)
     end
-    return _expected_misfit(M, Γx, μ, Σpost, w, g)
+    return _expected_misfit(M, Vx, μ, Σpost, w, g)
 end
 
 # Analytic gradient of _chi_misfit for real problems with fixed geometry, eq. (chi_gradient).
@@ -504,6 +537,8 @@ function solve(sim::Simulation{VariationalBayesianSolver, Dim}) where Dim
         Cf = cholesky(Symmetric(Matrix(noise)))
         (Matrix(Symmetric(inv(Cf))), logdet(Cf))
     end
+    # left square root of Σ⁻¹, used by every data-sized coefficient posterior
+    W = _whitener(w)
 
     # --- geometry prior Σ_x (diagonal) ---
     Σx_raw = cov(bd.boundary_shape.boundary_points)
@@ -537,7 +572,7 @@ function solve(sim::Simulation{VariationalBayesianSolver, Dim}) where Dim
     # boundary stays anchored at the original nominal boundary μ_x0 across re-centerings
     x_nominal = do_geometry ? Vector{Float64}(vcat(mean_points(bd)...)) : nothing
     m0 = do_geometry ? zeros(length(sx2)) : nothing
-    Γ = do_geometry ? _gamma(gradM, Σδx, w, d_m, K) : nothing
+    Vγ = do_geometry ? _gamma_factor(gradM, Σδx, w, d_m) : nothing
 
     elbo_history = Float64[]
     baseline_resets = Int[]
@@ -551,7 +586,7 @@ function solve(sim::Simulation{VariationalBayesianSolver, Dim}) where Dim
         reset_baseline = false
 
         # --- E-step I: update q(a), eq. (vb_coefficient_update) ---
-        μ, Σpost, logdetΣ = _coefficient_posterior(M, Γ, α, w, g)
+        μ, Σpost, logdetΣ = _coefficient_posterior(M, Vγ, α, W, g)
 
         # --- E-step II: update q(δx) and re-center, eq. (vb_boundary_update) ---
         if do_geometry
@@ -569,7 +604,7 @@ function solve(sim::Simulation{VariationalBayesianSolver, Dim}) where Dim
                 # change, across which values of the bound are not comparable
                 reset_baseline = step > 1e-2 * prior_scale
             end
-            Γ = _gamma(gradM, Σδx, w, d_m, K)
+            Vγ = _gamma_factor(gradM, Σδx, w, d_m)
         end
 
         # --- M-step: prior precisions, EM update eq. (alpha_update) ---
@@ -598,7 +633,7 @@ function solve(sim::Simulation{VariationalBayesianSolver, Dim}) where Dim
                 src_pos = src_pos[keep]
                 if do_geometry
                     gradM = gradM[:, _kept_columns(keep, n_active, FD, false), :]
-                    Γ = Γ[cols, cols]
+                    Vγ = Vγ[:, cols]
                 end
                 K = length(α)
                 Kh = length(src_pos) * FD
@@ -609,10 +644,10 @@ function solve(sim::Simulation{VariationalBayesianSolver, Dim}) where Dim
         # --- M-step: source positions χ, a few L-BFGS steps on eq. (chi_gradient) ---
         if solver.options.optimise_source_positions_flag && !isempty(src_pos)
             chi0 = Vector{Float64}(vcat(src_pos...))
-            R0 = _expected_misfit(M, Γ, μ, Σpost, w, g)
+            R0 = _expected_misfit(M, Vγ, μ, Σpost, w, g)
 
             obj = chi -> _chi_misfit(chi, medium, bd_current, iscomplex, μ, Σpost, w, g, Dim;
-                Γ = Γ, Σδx = do_geometry ? Σδx : nothing, d_m = d_m)
+                Vγ = Vγ, Σδx = do_geometry ? Σδx : nothing, d_m = d_m)
 
             opts = Optim.Options(iterations = solver.options.source_position_iters)
             use_analytic = solver.options.use_greens_gradient_analytical_flag && !iscomplex &&
@@ -631,13 +666,13 @@ function solve(sim::Simulation{VariationalBayesianSolver, Dim}) where Dim
                 M = _stacked_system_matrix(src_pos, medium, bd_current, iscomplex)
                 if do_geometry
                     gradM = system_matrix_gradient(src_pos, medium, bd_current)
-                    Γ = _gamma(gradM, Σδx, w, d_m, K)
+                    Vγ = _gamma_factor(gradM, Σδx, w, d_m)
                 end
             end
         end
 
         # --- monitor the bound, eq. (elbo_model) ---
-        R = _expected_misfit(M, Γ, μ, Σpost, w, g)
+        R = _expected_misfit(M, Vγ, μ, Σpost, w, g)
         F = _elbo(R, Nr, noise_logdet, α, μ, Σpost, logdetΣ;
             μδx = μδx, Σδx = Σδx, logdetΣδx = logdetΣδx, sx2 = sx2, m0 = m0)
 
@@ -658,8 +693,8 @@ function solve(sim::Simulation{VariationalBayesianSolver, Dim}) where Dim
     end
 
     # --- final inference at the learned hyperparameters ---
-    μ, Σpost, logdetΣ = _coefficient_posterior(M, Γ, α, w, g)
-    R = _expected_misfit(M, Γ, μ, Σpost, w, g)
+    μ, Σpost, logdetΣ = _coefficient_posterior(M, Vγ, α, W, g)
+    R = _expected_misfit(M, Vγ, μ, Σpost, w, g)
     misfit_ratio = R / Nr
 
     relative_boundary_error = norm(M * μ - g) / norm(g)

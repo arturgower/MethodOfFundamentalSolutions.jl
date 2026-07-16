@@ -1,5 +1,40 @@
 # Bayesian Inference Routines for MFS Inverse Problems.
 
+
+"""
+    BayesianSolver{P} <: AbstractSolver
+
+Bayesian solver for MFS.
+
+# Parameters
+- `prior::P`: The prior distribution for the solution
+- `options::SolverOptions`: the options shared with the other solvers, see
+  [`SolverOptions`](@ref); the keyword constructor accepts them as keywords directly.
+The solution is the posterior distribution over the coefficients given the boundary data and the prior.
+"""
+struct BayesianSolver{P<:ContinuousMultivariateDistribution} <: AbstractSolver
+    prior::P
+    options::SolverOptions
+    gradient_tol::Float64
+    objective_function_tol::Float64
+end
+
+function BayesianSolver(
+    prior::ContinuousMultivariateDistribution;
+    optimise_source_positions_flag::Bool = false,
+    use_greens_gradient_analytical_flag::Bool = true,
+    gradient_tol::Float64 = 1e-3,
+    objective_function_tol::Float64 = 1e-4,
+    max_iters::Int = 50
+)
+    options = SolverOptions(;
+        optimise_source_positions_flag = optimise_source_positions_flag,
+        use_greens_gradient_analytical_flag = use_greens_gradient_analytical_flag,
+        max_iters = max_iters
+    )
+    return BayesianSolver{typeof(prior)}(prior, options, gradient_tol, objective_function_tol)
+end
+
 #Helper function to compute the matrix (Cx).
 #Shared across optimization and posterior routines.
 #Works seamlessly for both scalar and matrix-valued Green's functions.
@@ -244,12 +279,11 @@ function construct_prior(
     )
     
     opt_sim = Simulation(
-    sim.medium, 
-    sim.boundary_data; 
+    sim.medium,
+    sim.boundary_data;
     solver =opt_solver,
     source_positions = chi_opt,
     particular_solution = NoParticularSolution(),
-    ω = 2pi * 1.0
     )
 
 
@@ -257,5 +291,35 @@ function construct_prior(
 end
 
 
+function solve(
+    sim::Simulation{<:BayesianSolver{<:AbstractMvNormal}, Dim}
+    ) where {Dim}
+    
+    # 1. Determine Source Positions (chi)
+    if sim.solver.options.optimise_source_positions_flag
+        @info "Optimizing source positions..."
+        best_source_positions = optimise_source_positions(sim)
+    else
+        best_source_positions = vcat(sim.source_positions...)
+    end
+
+    # 2. Compute Posterior Coefficients
+    μ_post, Σ_post = compute_coefficient_posterior(
+            sim, best_source_positions
+        )
+    
+    new_source_positions = [
+    SVector{Dim, Float64}(best_source_positions[i : i + Dim - 1]) 
+    for i in 1:Dim:length(best_source_positions)
+    ]
+    # 3. Return the solution
+    return FundamentalSolution(
+        sim.medium; 
+        positions = new_source_positions,
+        coefficients = μ_post, 
+        coefficients_covariance = Σ_post,
+        particular_solution = sim.particular_solution
+    )
+end
 
 

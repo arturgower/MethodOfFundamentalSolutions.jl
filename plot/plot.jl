@@ -151,13 +151,13 @@ end
 # overlay the source points. The heatmap is produced by delegating to the FieldResult
 # recipe below; see [`predict_field`](@ref) for the keyword arguments.
 @recipe function plot(fsol::FundamentalSolution, bd::BoundaryData;
-        xres = 30, yres = 30, normal_vec = nothing, field_transform = identity, sources = true)
+        xres = 30, yres = 30, normal_vec = nothing, field_apply = identity, sources = true)
 
     aspect_ratio --> 1.0
     legend --> false
 
     fr = predict_field(fsol, bd;
-        xres = xres, yres = yres, normal_vec = normal_vec, field_transform = field_transform)
+        xres = xres, yres = yres, normal_vec = normal_vec, field_apply = field_apply)
 
     @series begin
         seriestype := :heatmap
@@ -210,13 +210,13 @@ end
 # The variational field over the interior of `bd`, with the learned sources overlaid and
 # sized/coloured by their prior standard deviation.
 @recipe function plot(vsol::VariationalSolution, bd::BoundaryData;
-        xres = 30, yres = 30, normal_vec = nothing, field_transform = identity)
+        xres = 30, yres = 30, normal_vec = nothing, field_apply = real)
 
     aspect_ratio --> 1.0
     legend --> false
 
     fr = predict_field(vsol.fsol, bd;
-        xres = xres, yres = yres, normal_vec = normal_vec, field_transform = field_transform)
+        xres = xres, yres = yres, normal_vec = normal_vec, field_apply = field_apply)
 
     @series begin
         seriestype := :heatmap

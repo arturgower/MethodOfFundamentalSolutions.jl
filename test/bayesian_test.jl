@@ -64,7 +64,6 @@
         solver = solver_analytical,
         source_positions = init_source_positions,
         particular_solution = NoParticularSolution(),
-        ω = 2pi * 1.0
     )
 
     # --- Simulation 2: Finite Difference ---
@@ -79,7 +78,6 @@
         solver = solver_fd,
         source_positions = init_source_positions,
         particular_solution = NoParticularSolution(),
-        ω = 2pi * 1.0
     )
     
     # Define source positions as SVectors
@@ -265,7 +263,6 @@ end
     solver = solver_analytical,
     source_positions = init_source_positions,
     particular_solution = NoParticularSolution(),
-    ω = 2pi * 1.0
     )
 
     # --- Simulation 2: Finite Difference ---
@@ -280,7 +277,6 @@ end
     solver = solver_fd,
     source_positions = init_source_positions,
     particular_solution = NoParticularSolution(),
-    ω = 2pi * 1.0
     )
     structured_chi = [SVector{2, Float64}(pos[1], pos[2]) for pos in init_source_positions]
     

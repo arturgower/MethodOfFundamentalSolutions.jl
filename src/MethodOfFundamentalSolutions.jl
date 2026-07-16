@@ -26,18 +26,23 @@ include("boundarydata.jl")
 export interior_points_along_coordinate
 include("utils.jl")
 
-export log_marginal_likelihood, optimise_hyperparameters, compute_coefficient_posterior, reconstruct_full_field, construct_prior, geometric_covariance # Bayesian functions
-export ProbabilityDistribution, GaussianDistribution, BayesianSolver # Prior types
-include("bayesian.jl")
-
 export Simulation, ParticularSolution, TikhonovSolver, NoParticularSolution # types
 export greens, source_positions, greens_gradient
 export solve, system_matrix, system_matrix_gradient
 include("solve.jl")
 
+# bayesian.jl defines `BayesianSolver <: AbstractSolver` and methods on `Simulation`, so it
+# must be included after solve.jl, which defines `AbstractSolver`, `SolverOptions` and `Simulation`.
+export log_marginal_likelihood, optimise_hyperparameters, compute_coefficient_posterior, reconstruct_full_field, construct_prior, geometric_covariance # Bayesian functions
+export ProbabilityDistribution, GaussianDistribution, BayesianSolver # Prior types
+include("bayesian.jl")
+
 export FieldResult, FundamentalSolution
 export field, field_covariance, field_std, predict_field # types
 include("results.jl")
+
+export TransmissionSimulation, PointSource # transmission (penetrable-scatterer) problems
+include("transmission.jl")
 
 export VariationalBayesianSolver, VariationalSolution, grid_source_positions
 include("variational.jl")

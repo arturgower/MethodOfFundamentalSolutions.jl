@@ -151,7 +151,7 @@ end
 
 """
     predict_field(fsol::FundamentalSolution, bd::BoundaryData;
-        normal_vec = nothing, xres = 30, yres = 30, field_transform = identity)
+        normal_vec = nothing, xres = 30, yres = 30, field_apply = identity)
 
 Sample the field of `fsol` at every grid point inside the shape `bd`, returning a
 [`FieldResult`](@ref). Points of the bounding-box grid that fall outside the shape are set
@@ -162,18 +162,18 @@ field alone (rather than being dragged towards zero by the exterior).
 - `xres`, `yres`: grid resolution passed to `points_in_shape`.
 - `normal_vec`: the outward normal handed to `field`. It matters only for traction/Neumann
   fields; for displacement/Dirichlet it is ignored. Defaults to `ones(Dim)`.
-- `field_transform`: applied elementwise to each field value. Use `real` or `abs` for
+- `field_apply`: applied elementwise to each field value. Use `real` or `abs` for
   complex (Helmholtz) fields, whose complex values cannot be stored in the real
   `FieldResult`.
 """
 function predict_field(fsol::FundamentalSolution, bd::BoundaryData{F, Dim};
-        normal_vec = nothing, xres::Int = 30, yres::Int = 30, field_transform = identity
+        normal_vec = nothing, xres::Int = 30, yres::Int = 30, field_apply = real
     ) where {F, Dim}
 
     x_vec, inds = points_in_shape(bd; xres = xres, yres = yres)
     n = normal_vec === nothing ? ones(Dim) : normal_vec
 
-    fs = [field_transform.(field(bd.fieldtype, fsol, x, n)) for x in x_vec[inds]]
+    fs = [field_apply.(field(bd.fieldtype, fsol, x, n)) for x in x_vec[inds]]
 
     FD = isempty(fs) ? 1 : length(first(fs))
     field_mat = [fill(NaN, FD) for _ in x_vec]
