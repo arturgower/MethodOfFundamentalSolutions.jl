@@ -13,7 +13,7 @@ A type representing a fundamental solution. The fundamental solution is construc
   freedom `[Re a; Im a]`, and `field_covariance` correspondingly returns the covariance of
   the stacked field `[Re f; Im f]`.
 """
-struct FundamentalSolution{Dim,P<:PhysicalMedium{Dim}, PS <:ParticularSolution, T, C, M}
+struct FundamentalSolution{Dim,P<:PhysicalMedium{Dim}, PS <: AnyParticularSolution, T, C, M}
     medium::P
     particular_solution::PS
     positions::Vector{SVector{Dim,T}}
@@ -28,7 +28,7 @@ function FundamentalSolution(medium::P;
         coefficients::AbstractVector = [one(Float64)],
         coefficients_covariance::Union{AbstractMatrix, UniformScaling} = 0.0*I,
         relative_boundary_error = zero(Float64)
-    ) where {P<:PhysicalMedium, PS <: ParticularSolution}
+    ) where {P<:PhysicalMedium, PS <: AnyParticularSolution}
 
     # Extract dimension information
     Dim = spatial_dimension(medium)
@@ -67,13 +67,19 @@ function FundamentalSolution(medium::P;
     return FundamentalSolution{Dim,P,PS,T,C,typeof(coefficients_covariance)}(medium, particular_solution, pos_converted, coef_converted, coefficients_covariance, relative_boundary_error)
 end
 
-function field(field_type::F, medium::P, psol::NoParticularSolution, x::AbstractVector, outward_normal::AbstractVector) where {F <: FieldType, P <: PhysicalMedium} 
+function field(field_type::F, medium::P, psol::NoParticularSolution, x::AbstractVector, outward_normal::AbstractVector) where {F <: FieldType, P <: PhysicalMedium}
     if medium isa Elastostatic
         return SVector(zero(x)...)
     else
         return  SVector(0.0) #SVector([zeros(1) for i in 1:length(x)]...)
     end
-    
+
+end
+
+# a vector of particular solutions contributes the sum of their fields
+function field(field_type::F, medium::P, psols::ParticularSolutions, x::AbstractVector, outward_normal::AbstractVector) where {F <: FieldType, P <: PhysicalMedium}
+    isempty(psols) && return field(field_type, medium, NoParticularSolution(), x, outward_normal)
+    return sum(psol -> field(field_type, medium, psol, x, outward_normal), psols)
 end
 
 function field(field_type::F, fsol::FundamentalSolution, x::AbstractVector, outward_normal::AbstractVector = ones(x |> length)) where F <: FieldType
@@ -89,7 +95,7 @@ function field(field_type::F, fsol::FundamentalSolution, x::AbstractVector, outw
     return f + fp
 end
 
-function field(medium::P, bd::BoundaryData, psol::PS) where {P <: PhysicalMedium, PS <: ParticularSolution}
+function field(medium::P, bd::BoundaryData, psol::PS) where {P <: PhysicalMedium, PS <: AnyParticularSolution}
 
     pts = mean_points(bd)
     normals = mean_normals(bd)

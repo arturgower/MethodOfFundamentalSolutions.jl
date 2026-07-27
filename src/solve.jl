@@ -55,6 +55,17 @@ abstract type ParticularSolution end
 struct NoParticularSolution <: ParticularSolution end
 
 """
+    ParticularSolutions
+
+A vector of [`ParticularSolution`](@ref)s whose fields are summed. Accepted anywhere a
+single `ParticularSolution` is (e.g. as the `particular_solution` of a [`Simulation`](@ref)).
+"""
+const ParticularSolutions = AbstractVector{<:ParticularSolution}
+
+# a single ParticularSolution or a vector of them (whose fields are summed)
+const AnyParticularSolution = Union{ParticularSolution, ParticularSolutions}
+
+"""
     TikhonovSolver{T<:Real} <: AbstractSolver
 
 Tikhonov regularization solver for MFS.
@@ -89,8 +100,11 @@ share the same `source_positions` but impose different boundary conditions on (p
 different points — e.g. traction on part of the boundary and displacement on another. Each
 `BoundaryData` in the tuple contributes its own block of rows to the system matrix, stacked
 in the order given.
+
+`particular_solution` may be a single [`ParticularSolution`](@ref) or a vector of them
+([`ParticularSolutions`](@ref)), in which case their fields are summed.
 """
-struct Simulation{S <: AbstractSolver, Dim, P<:PhysicalMedium{Dim}, PS <:ParticularSolution, BD}
+struct Simulation{S <: AbstractSolver, Dim, P<:PhysicalMedium{Dim}, PS <: AnyParticularSolution, BD}
     solver::S
     medium::P
     boundary_data::BD
@@ -104,7 +118,7 @@ _as_tuple(bds::Tuple) = bds
 
 function Simulation(medium::P, bd::BoundaryData{<:FieldType,Dim};
         solver::AbstractSolver = TikhonovSolver(),
-        particular_solution::ParticularSolution = NoParticularSolution(),
+        particular_solution::AnyParticularSolution = NoParticularSolution(),
         source_positions = source_positions(bd; relative_source_distance = 1.2),
     ) where {Dim, P <: PhysicalMedium{Dim}}
 
@@ -114,7 +128,7 @@ end
 
 function Simulation(medium::P, bds::Tuple{Vararg{BoundaryData{<:FieldType,Dim}}};
         solver::AbstractSolver = TikhonovSolver(),
-        particular_solution::ParticularSolution = NoParticularSolution(),
+        particular_solution::AnyParticularSolution = NoParticularSolution(),
         source_positions = source_positions(bds; relative_source_distance = 1.2),
     ) where {Dim, P <: PhysicalMedium{Dim}}
 

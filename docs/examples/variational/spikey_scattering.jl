@@ -1,4 +1,4 @@
-# # Scattering from spikey obstacles: sources everywhere, ARD decides, uncertainty for free
+# # Scattering from spikey obstacles: select the sources once, reuse them for any incidence
 #
 # This example advertises what the variational method (`VariationalBayesianSolver`) buys you
 # over classical MFS on a problem where classical MFS is genuinely awkward: scattering from
@@ -9,17 +9,22 @@
 # gaps between the obstacles. With classical MFS, source placement near each spike is
 # make-or-break (see docs/examples/acoustic/teardrop_scattering.jl, where a single missing
 # source at a cusp destabilises the whole fit). Here we refuse to think about placement at
-# all:
+# all, and we go one step further — we select the sources ONCE, for many incidences at once:
 #
 #   * candidate sources are laid down EVERYWHERE the physics allows — a blind regular grid
 #     carpeting the inside of every obstacle, with no idea where the spikes are;
 #   * automatic relevance determination (ARD) learns the prior precision of every candidate
-#     and prunes the ones the data do not need, keeping a compact set that resolves the
-#     spikes on its own;
-#   * because the solver is Bayesian, the answer is a posterior: every point of the
-#     scattered field comes with an uncertainty s(x), mapped in a companion panel as a
-#     percentage of the mean field magnitude — it concentrates in the gaps between the
-#     obstacles, where the multiply-scattered field is hardest to pin down.
+#     and prunes the ones the data do not need — but it is TRAINED on an omni-directional
+#     illumination: a ring of incident point sources all around the scene, whose fields are
+#     summed (a `Simulation` now accepts a vector of particular solutions). The retained
+#     sources therefore have to resolve the whole of every boundary, not just the lit side of
+#     a single incidence;
+#   * we then FIX those selected positions and re-solve for a SINGLE incident source. Because
+#     the solver is Bayesian, that answer is a posterior: every point of the scattered field
+#     comes with an uncertainty s(x), mapped in a companion panel as a percentage of the mean
+#     field magnitude — it concentrates in the gaps between the obstacles, where the
+#     multiply-scattered field is hardest to pin down. It is this single-source posterior that
+#     the field picture and the gif animate.
 #
 # (Sources must lie inside the obstacles: the scattered field must be regular and radiating
 # everywhere in the exterior domain, and each MFS source is singular at its own position.
@@ -27,8 +32,8 @@
 #
 # The Dirichlet condition (total pressure = 0 on each boundary) is imposed as noisy data:
 # each boundary sensor reports zero total pressure to within a known noise σ. The incident
-# field is a point source, passed as the particular solution, so the solved
-# `FundamentalSolution` evaluates to the total field.
+# field is a point source (or, for training, a ring of them), passed as the particular
+# solution, so the solved `FundamentalSolution` evaluates to the total field.
 #
 # Needs Plots.jl (not a dependency of this package): run from an environment where both
 # `using MethodOfFundamentalSolutions` and `using Plots` work.
@@ -94,25 +99,46 @@ normals = vcat([[boundary_normal(o, θ) for θ in θs] for (o, θs) in zip(obsta
 centres = [o.centre for o in obstacles]
 
 # ---------------------------------------------------------------------------------------------
-# Physics: Dirichlet (sound-soft) obstacles lit by an incident point source from the lower
-# right.
-# The boundary data are noisy measurements of zero total pressure: each sensor is an
-# `MvNormal` over the stacked [Re; Im] parts of its field, with the known noise σ as its
-# covariance — this is how the variational solver is told the measurement noise.
+# Physics: Dirichlet (sound-soft) obstacles. The MFS sources are SELECTED with ARD from an
+# omni-directional training illumination — a ring of incident point sources all around the
+# scene — and only then reused for a single incidence. The boundary data are noisy
+# measurements of zero total pressure: each sensor is an `MvNormal` over the stacked [Re; Im]
+# parts of its field, with the known noise σ as its covariance — this is how the variational
+# solver is told the measurement noise.
 # ---------------------------------------------------------------------------------------------
 ω = 2π                       # wavelength 2π/ω = 1: obstacle diameters span a few wavelengths
 medium = Acoustic(2; ω = ω, ρ = 1.0, c = 1.0)
-x_source = SVector(3.6, -2.4)
-incident = PointSource([x_source], [one(ComplexF64)])
 
-incident_on_boundary = [field(TractionType(), medium, incident, p, n)[1] for (p, n) in zip(pts, normals)]
-σ = 0.03 * maximum(abs, incident_on_boundary)      # 3% of the strongest boundary signal
+# the trace of an incident field on the boundary sensors, as one complex scalar per sensor.
+# `inc` may be a single `PointSource` or a vector of them, in which case their fields are
+# summed (see the vector `particular_solution` of the training simulation below).
+trace_on_boundary(inc) = [field(TractionType(), medium, inc, p, n)[1] for (p, n) in zip(pts, normals)]
 
-fields = [MvNormal(σ .* randn(2), σ^2 * I(2)) for _ in pts]
+# noisy-zero Dirichlet data (total pressure = 0) with independent noise σ per sensor
+dirichlet_data(σ) = [MvNormal(σ .* randn(2), σ^2 * I(2)) for _ in pts]
 
-bd = BoundaryData(TractionType();
+# ---------------------------------------------------------------------------------------------
+# TRAINING illumination: `n_incident` incident point sources equally spaced on a ring that
+# encloses every obstacle. Their superposition lights the obstacles from every side at once,
+# so the sources ARD keeps have to resolve the whole of every boundary, not just the lit side
+# of one incidence.
+# ---------------------------------------------------------------------------------------------
+n_incident = 20
+scene_centre = sum(centres) / length(centres)
+incident_radius = 3.5
+incident_positions = [
+    scene_centre + incident_radius * SVector(cos(θ), sin(θ))
+for θ in LinRange(0, 2π, n_incident + 1)[1:n_incident]]
+@assert !any(inside_any, incident_positions) "an incident source landed inside an obstacle"
+incident_sources = [PointSource([x], [one(ComplexF64)]) for x in incident_positions]
+
+# the combined training trace (the vector sums the ring) and a 3%-of-peak noise level
+train_on_boundary = trace_on_boundary(incident_sources)
+σ_train = 0.03 * maximum(abs, train_on_boundary)
+
+bd_train = BoundaryData(TractionType();
     boundary_points = pts,
-    fields = fields,
+    fields = dirichlet_data(σ_train),
     normals = normals,
     interior_points = centres
 )
@@ -141,9 +167,10 @@ end
 @info "an overcomplete basis: more unknowns than data" candidates = length(candidates) coefficients = 2 * length(candidates) data = 2 * length(pts)
 
 # ---------------------------------------------------------------------------------------------
-# Solve. ARD learns a prior precision αᵢ for every candidate coefficient and prunes the
-# sources whose precision diverges (they are switched off by the data); the survivors carry
-# a full Gaussian posterior, which is what the uncertainty pictures below are drawn from.
+# Solve #1 — SELECT the sources. ARD learns a prior precision αᵢ for every candidate
+# coefficient and prunes the sources whose precision diverges (switched off by the data) under
+# the combined ring illumination; the survivors are the source set we keep. This posterior is
+# used only for its retained positions.
 # ---------------------------------------------------------------------------------------------
 solver = VariationalBayesianSolver(
     prior_variance = 1.0,
@@ -152,15 +179,49 @@ solver = VariationalBayesianSolver(
     elbo_tol = 1e-9
 )
 
-sim = Simulation(medium, bd;
+sim_train = Simulation(medium, bd_train;
     source_positions = candidates,
-    particular_solution = incident,
+    particular_solution = incident_sources,   # a vector: the fields of the ring are summed
     solver = solver
 )
-t_prune = @elapsed vsol = solve(sim)
+t_prune = @elapsed vsol_train = solve(sim_train)
 
-kept = vsol.fsol.positions
-@info "ARD pruned the candidate grid" kept = length(kept) of = length(candidates) seconds = round(t_prune, digits = 1) iterations = length(vsol.elbo_history) misfit_ratio = round(vsol.misfit_ratio, digits = 3)
+kept = vsol_train.fsol.positions
+@info "ARD pruned the candidate grid" kept = length(kept) of = length(candidates) seconds = round(t_prune, digits = 1) iterations = length(vsol_train.elbo_history) misfit_ratio = round(vsol_train.misfit_ratio, digits = 3)
+
+# ---------------------------------------------------------------------------------------------
+# Solve #2 — USE the sources. Keeping the selected positions FIXED (ARD pruning switched off),
+# re-solve for ONE incident source. This single-source posterior is what every picture below
+# draws from: the total field it predicts, and its uncertainty.
+# ---------------------------------------------------------------------------------------------
+gif_index = argmax([p[1] - p[2] for p in incident_positions])   # a lower-right incidence
+x_source = incident_positions[gif_index]
+incident = incident_sources[gif_index]
+
+incident_on_boundary = trace_on_boundary(incident)
+σ = 0.03 * maximum(abs, incident_on_boundary)      # 3% of the strongest boundary signal
+
+bd = BoundaryData(TractionType();
+    boundary_points = pts,
+    fields = dirichlet_data(σ),
+    normals = normals,
+    interior_points = centres
+)
+
+solver_fixed = VariationalBayesianSolver(
+    prior_variance = 1.0,
+    ard_threshold = 1e6,
+    ard_prune_flag = false,     # keep exactly the sources ARD selected above
+    max_iters = 300,
+    elbo_tol = 1e-9
+)
+
+sim = Simulation(medium, bd;
+    source_positions = kept,
+    particular_solution = incident,
+    solver = solver_fixed
+)
+vsol = solve(sim)
 
 # ---------------------------------------------------------------------------------------------
 # Did it work? Check the Dirichlet condition at FRESH boundary points (halfway between the
@@ -281,16 +342,19 @@ gif(anim, joinpath(FIGDIR, "spikey_scattering.gif"), fps = 10)
 # --- what ARD did: the blind candidate grid next to the retained sources,
 #     sized by the posterior magnitude of their coefficients ---
 plt_cand = plot(; aspect_ratio = 1, xlims = xlims, ylims = ylims, axis = false, grid = false,
-    title = "$(length(candidates)) candidate sources", titlefontsize = 11)
+    title = "$(length(candidates)) candidates · $(n_incident) training incidences", titlefontsize = 11)
 for (ox, oy) in outlines
     plot!(plt_cand, ox, oy; lc = :black, lw = 1.2, label = "")
 end
 scatter!(plt_cand, [s[1] for s in candidates], [s[2] for s in candidates];
     mc = :gray, ms = 1.6, msw = 0, label = "")
+scatter!(plt_cand, [s[1] for s in incident_positions], [s[2] for s in incident_positions];
+    mc = :orange, ms = 4, msw = 0, label = "")               # the training ring, all around
+scatter!(plt_cand, [x_source[1]], [x_source[2]]; mc = :lime, ms = 6, msw = 1, label = "")  # the one animated
 
 amp = abs.(vsol.fsol.coefficients)
 plt_kept = plot(; aspect_ratio = 1, xlims = xlims, ylims = ylims, axis = false, grid = false,
-    title = "$(length(kept)) kept after 55s (ARD), size = |coefficient|", titlefontsize = 11)
+    title = "$(length(kept)) kept (ARD, $(round(t_prune, digits = 1))s), size = |coefficient|", titlefontsize = 11)
 for (ox, oy) in outlines
     plot!(plt_kept, ox, oy; lc = :black, lw = 1.2, label = "")
 end
