@@ -15,11 +15,18 @@ Options shared by the solvers that can optimise the source positions
 # Fields
 - `optimise_source_positions_flag::Bool`: optimise the source positions χ.
 - `use_greens_gradient_analytical_flag::Bool`: use the analytic `greens_gradient` where
-  available; otherwise finite differences are used.
+  available; otherwise finite differences are used (used by [`BayesianSolver`](@ref); the
+  [`VariationalBayesianSolver`](@ref) always uses finite differences on single-source columns).
 - `update_geometry_flag::Bool`: update the boundary factor and re-center the boundary
   (used by [`VariationalBayesianSolver`](@ref)).
 - `learn_prior_flag::Bool`: learn the prior (used by [`VariationalBayesianSolver`](@ref)).
-- `max_iters::Int`: maximum number of iterations of the solver's outer loop.
+- `max_iters::Int`: maximum number of iterations of the solver's outer loop, each of which
+  updates the whole model.
+- `max_select_iters::Int`: maximum number of actions of the source-selection phase of the
+  [`VariationalBayesianSolver`](@ref), which adds, re-estimates or deletes ONE coefficient
+  per action and so needs a budget of a different order from `max_iters`. Negative (the
+  default) means automatic: four times the number of candidate coefficients. Selection stops
+  by itself as soon as no action increases the evidence, so this is only a safety net.
 - `source_position_iters::Int`: inner iterations per source-position optimisation step.
 """
 struct SolverOptions
@@ -28,6 +35,7 @@ struct SolverOptions
     update_geometry_flag::Bool
     learn_prior_flag::Bool
     max_iters::Int
+    max_select_iters::Int
     source_position_iters::Int
 end
 
@@ -37,11 +45,13 @@ function SolverOptions(;
         update_geometry_flag::Bool = false,
         learn_prior_flag::Bool = true,
         max_iters::Int = 50,
+        max_select_iters::Int = -1,
         source_position_iters::Int = 5
     )
     return SolverOptions(
         optimise_source_positions_flag, use_greens_gradient_analytical_flag,
-        update_geometry_flag, learn_prior_flag, max_iters, source_position_iters
+        update_geometry_flag, learn_prior_flag, max_iters, max_select_iters,
+        source_position_iters
     )
 end
 

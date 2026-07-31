@@ -13,12 +13,13 @@
 #
 #   * candidate sources are laid down EVERYWHERE the physics allows — a blind regular grid
 #     carpeting the inside of every obstacle, with no idea where the spikes are;
-#   * automatic relevance determination (ARD) learns the prior precision of every candidate
-#     and prunes the ones the data do not need — but it is TRAINED on an omni-directional
-#     illumination: a ring of incident point sources all around the scene, whose fields are
-#     summed (a `Simulation` now accepts a vector of particular solutions). The retained
-#     sources therefore have to resolve the whole of every boundary, not just the lit side of
-#     a single incidence;
+#   * sparse Bayesian learning then SELECTS from that grid one source at a time: starting from
+#     an empty basis it repeatedly adds the single candidate that most increases the Bayesian
+#     evidence, each at its exact optimal prior precision, and stops when no candidate is worth
+#     adding — but it is TRAINED on an omni-directional illumination: a ring of incident point
+#     sources all around the scene, whose fields are summed (a `Simulation` now accepts a vector
+#     of particular solutions). The selected sources therefore have to resolve the whole of
+#     every boundary, not just the lit side of a single incidence;
 #   * we then FIX those selected positions and re-solve for a SINGLE incident source. Because
 #     the solver is Bayesian, that answer is a posterior: every point of the scattered field
 #     comes with an uncertainty s(x), mapped in a companion panel as a percentage of the mean
@@ -167,13 +168,23 @@ end
 @info "an overcomplete basis: more unknowns than data" candidates = length(candidates) coefficients = 2 * length(candidates) data = 2 * length(pts)
 
 # ---------------------------------------------------------------------------------------------
-# Solve #1 — SELECT the sources. ARD learns a prior precision αᵢ for every candidate
-# coefficient and prunes the sources whose precision diverges (switched off by the data) under
-# the combined ring illumination; the survivors are the source set we keep. This posterior is
-# used only for its retained positions.
+# Solve #1 — SELECT the sources. Starting from an EMPTY basis, the solver repeatedly adds the
+# single candidate coefficient that most increases the evidence, each at its exact optimal prior
+# precision αᵢ, and stops when no candidate is worth adding — all under the combined ring
+# illumination. The selected sources are the set we keep; this posterior is used only for its
+# retained positions.
+#
+# Selection performs ONE action (add, re-estimate or delete a single coefficient) per iteration,
+# so it has its own budget `max_select_iters`, separate from the `max_iters` whole-model sweeps:
+# we leave it at its default, which allows four actions per candidate coefficient and stops the
+# moment no action increases the evidence (about 2000 actions here). No `prior_variance` either:
+# the selection phase derives every precision from the data, so an initial value is ignored.
+#
+# This is the expensive step of the example — a few minutes to sift 2600-odd candidates against
+# 1200 data rows. It is also the step you only pay once: that is the whole point of selecting the
+# sources for a ring of incidences and then reusing them.
 # ---------------------------------------------------------------------------------------------
 solver = VariationalBayesianSolver(
-    prior_variance = 1.0,
     ard_threshold = 1e6,
     max_iters = 300,
     elbo_tol = 1e-9
@@ -187,7 +198,7 @@ sim_train = Simulation(medium, bd_train;
 t_prune = @elapsed vsol_train = solve(sim_train)
 
 kept = vsol_train.fsol.positions
-@info "ARD pruned the candidate grid" kept = length(kept) of = length(candidates) seconds = round(t_prune, digits = 1) iterations = length(vsol_train.elbo_history) misfit_ratio = round(vsol_train.misfit_ratio, digits = 3)
+@info "the solver selected its sources from the candidate grid" kept = length(kept) of = length(candidates) seconds = round(t_prune, digits = 1) iterations = length(vsol_train.elbo_history) misfit_ratio = round(vsol_train.misfit_ratio, digits = 3)
 
 # ---------------------------------------------------------------------------------------------
 # Solve #2 — USE the sources. Keeping the selected positions FIXED (ARD pruning switched off),
@@ -354,7 +365,7 @@ scatter!(plt_cand, [x_source[1]], [x_source[2]]; mc = :lime, ms = 6, msw = 1, la
 
 amp = abs.(vsol.fsol.coefficients)
 plt_kept = plot(; aspect_ratio = 1, xlims = xlims, ylims = ylims, axis = false, grid = false,
-    title = "$(length(kept)) kept (ARD, $(round(t_prune, digits = 1))s), size = |coefficient|", titlefontsize = 11)
+    title = "$(length(kept)) selected ($(round(t_prune, digits = 1))s), size = |coefficient|", titlefontsize = 11)
 for (ox, oy) in outlines
     plot!(plt_kept, ox, oy; lc = :black, lw = 1.2, label = "")
 end

@@ -194,50 +194,74 @@ end
 end
 
 # ==============================================================================
-# 1. The analytic gradient of the expected misfit over the source positions χ
-#    must match finite differences.
+# 1. The hard-coded source-position optimisation (gradient-descent steps
+#    alternating with posterior re-solves) must recover the position of a single
+#    true source and drive the expected misfit down to the noise level.
 # ==============================================================================
-@testset "source position gradient consistency" begin
-    Random.seed!(123)
-    medium = Elastostatic(2; ρ = 1.0, cp = 2.0, cs = 1.0)
+@testset "source position descent recovers a source" begin
+    medium = LaplaceMedium{2, Float64}()
+    FT = DirichletType()
 
-    n_bd = 8
-    θs = LinRange(0, 2pi, n_bd + 1)[1:n_bd]
-    points = [[1.3cos(θ), 1.3sin(θ)] for θ in θs]
-    normals = [[cos(θ), sin(θ)] for θ in θs]
-    bd = BoundaryData(TractionType();
-        boundary_points = points,
-        fields = [randn(2) for _ in θs],
-        normals = normals,
-        interior_points = [[0.0, 0.0]]
-    )
+    N = 20
+    θs = LinRange(0, 2pi, N + 1)[1:N]
+    points = [[cos(θ), sin(θ)] for θ in θs]
+    χ_true = SVector(1.5, 0.2)
+    σ = 1e-3
+    g = [greens(FT, medium, x - Vector(χ_true)) for x in points]
+    bd = BoundaryData(FT; boundary_points = points,
+        fields = [MvNormal([gi], σ^2 * I(1)) for gi in g])
 
-    n_src = 5
-    θsrc = LinRange(0, 2pi, n_src + 1)[1:n_src]
-    chi = vcat([[2.1cos(θ), 2.1sin(θ)] for θ in θsrc]...)
+    W = Diagonal(fill(1 / σ, N))
+    ĝ = W * g
+    α = [1e-4]
+    basis = χ -> MFS._source_basis(χ, medium, bd, false, W, nothing, nothing, 1)
+    pts = mean_points(bd)
+    clearance = MFS._boundary_spacing(pts) / 2
 
-    FD = 2
-    K = FD * n_src
-    N = FD * n_bd
-    μ = randn(K)
-    A = randn(K, K)
-    Σpost = A' * A + I
-    w = rand(N) .+ 0.5
-    g = randn(N)
+    χ0 = SVector(2.2, -0.6)
+    Φ = basis(χ0)
+    μ0, Σ0, _ = MFS._coefficient_posterior(Φ, α, ĝ)
+    R0 = MFS._expected_misfit(Φ, μ0, Σ0, ĝ)
 
-    R(c) = MFS._chi_misfit(c, medium, bd, false, μ, Σpost, w, g, 2)
+    χ, μ, Σpost, _, moved = MFS._optimise_source_position!(Φ, [1], basis, χ0, α, ĝ, 30, pts, clearance)
+    R1 = MFS._expected_misfit(Φ, μ, Σpost, ĝ)
 
-    G = zeros(length(chi))
-    MFS._chi_misfit_gradient!(G, chi, medium, bd, μ, Σpost, w, g, 2, FD)
+    @test moved
+    @test R1 < 1e-3 * R0           # the misfit collapses once the source is found
+    @test norm(χ - χ_true) < 0.05  # to (essentially) the true position
+end
 
-    h = 1e-6
-    G_fd = map(eachindex(chi)) do i
-        cp = copy(chi); cm = copy(chi)
-        cp[i] += h; cm[i] -= h
-        (R(cp) - R(cm)) / (2h)
-    end
+# ==============================================================================
+# 1b. The selection phase adds/re-estimates/deletes ONE coefficient per action, so
+#     it has its own budget `max_select_iters`: the `max_iters` bound on the
+#     whole-model EM sweeps must NOT truncate it, while `max_select_iters` must.
+# ==============================================================================
+@testset "selection budget is independent of max_iters" begin
+    medium = LaplaceMedium{2, Float64}()
+    FT = DirichletType()
 
-    @test isapprox(G, G_fd; rtol = 1e-5)
+    N = 24
+    points = [[cos(θ), sin(θ)] for θ in LinRange(0, 2pi, N + 1)[1:N]]
+    true_sources = [[1.4, 0.3], [-1.2, 0.6], [0.2, -1.5]]
+    g = [sum(greens(FT, medium, x - s) for s in true_sources) for x in points]
+    bd = BoundaryData(FT; boundary_points = points,
+        fields = [MvNormal([gi], 1e-8 * I(1)) for gi in g])
+
+    candidates = [[1.7cos(θ), 1.7sin(θ)] for θ in LinRange(0, 2pi, 41)[1:40]]
+    solve_with(; kws...) = solve(Simulation(medium, bd;
+        solver = VariationalBayesianSolver(; ard_threshold = 1e6, elbo_tol = 1e-10, kws...),
+        source_positions = candidates))
+
+    # the default budget selects the same sources however few EM sweeps follow it
+    few = solve_with(max_iters = 25)
+    many = solve_with(max_iters = 200)
+    @test length(few.fsol.positions) == length(many.fsol.positions)
+    @test few.fsol.positions == many.fsol.positions
+
+    # an explicit budget does truncate the selection, leaving a worse bound
+    starved = solve_with(max_iters = 200, max_select_iters = 4)
+    @test length(starved.fsol.positions) <= 4
+    @test starved.elbo_history[end] < many.elbo_history[end]
 end
 
 # ==============================================================================
