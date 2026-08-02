@@ -28,10 +28,12 @@
 # coefficient precision from the boundary uncertainty, eq. (Gamma): then the coefficient
 # posterior, the expected misfit and the per-column evidence factors are all plain
 # least-squares expressions in Φ and ĝ. Since the basis is typically overcomplete, every
-# posterior is evaluated in the data-sized Woodbury form of
+# posterior over the retained basis is evaluated in the data-sized Woodbury form of
 # eqs. (posterior_mean_woodbury)-(posterior_covariance_woodbury): the K × K precision
 # ΦᵀΦ + diag α is never formed, and the only Cholesky is of a P × P matrix, P being the
-# number of rows of Φ.
+# number of rows of Φ. Phase 1 goes the other way round — its active set is far smaller
+# than P — and works with the k × k precision of the active columns alone; see
+# `_add_sources!`.
 
 """
     VariationalBayesianSolver <: AbstractSolver
@@ -564,12 +566,61 @@ end
 # independent of α; the limit ℓ(∞) = 0 is the column switched off.
 _log_evidence_1(α::Real, s::Real, q::Real) = isinf(α) ? 0.0 : (log(α / (α + s)) + q^2 / (α + s)) / 2
 
+# Relative drift of the S, Q recurrence of `_add_sources!`, measured against ‖φᵢ‖², at which
+# the factors are re-evaluated exactly.
+const SQ_REFRESH_TOL = 1e-9
+
+# The sparsity and quality factors S = diag(ΦᵀC⁻¹Φ) and Q = ΦᵀC⁻¹ĝ of every candidate column,
+# evaluated from scratch with C = I + Φ_A A⁻¹ Φ_Aᵀ the evidence covariance of the active model.
+# Through Woodbury, C⁻¹ = I - Φ_A Σ Φ_Aᵀ with Σ = (Φ_AᵀΦ_A + A)⁻¹ = (L Lᵀ)⁻¹, both follow from
+# Y = L⁻¹B alone, given the Gram rows B = Φ_Aᵀ Φ of the active columns `bcols`:
+#     S = diag(ΦᵀΦ) - diag(YᵀY),   Q = Φᵀĝ - Yᵀ(L⁻¹ Φ_Aᵀĝ).
+# This is the O(k²K) anchor of the recurrence in `_add_sources!`, not its per-action cost.
+function _sq_factors(Φnorm2::AbstractVector, Φtĝ::AbstractVector, B::AbstractMatrix,
+        bcols::AbstractVector{Int}, α::AbstractVector)
+
+    L = _safe_cholesky(B[:, bcols] + Diagonal(α[bcols])).L
+    Y = L \ B
+    S = Φnorm2 .- vec(sum(abs2, Y; dims = 1))
+    Q = Φtĝ .- transpose(Y) * (L \ Φtĝ[bcols])
+    return S, Q
+end
+
 # Sparse Bayesian learning at fixed candidate positions, run constructively: starting from
 # no sources, apply the single best action — add a column at its optimal precision
 # eq. (alpha_star), re-estimate the precision of an active column, or delete one — until no
 # action increases the evidence. Each action is the exact coordinate maximizer of the
 # evidence, so the bound increases monotonically. After each addition the position of the
 # added source is optionally refined by a few gradient-descent steps.
+#
+# What an action costs is decided by the sparsity and quality factors S, Q of ALL K candidate
+# columns. Read literally they ask for C⁻¹ = (I + Φ_A A⁻¹ Φ_Aᵀ)⁻¹ applied to the whole basis,
+# O(P²K) per action, which is what makes a dense candidate set expensive. Two things avoid it:
+#
+#   * Woodbury the other way round, C⁻¹ = I - Φ_A Σ Φ_Aᵀ with the k × k posterior covariance
+#     Σ = (Φ_AᵀΦ_A + A)⁻¹ of the k active columns, whose precision the Gram rows B = Φ_Aᵀ Φ
+#     already hold. Selection keeps k ≪ P, the opposite of the regime the data-sized form of
+#     `_coefficient_posterior` is written for. This alone brings S, Q down to the O(k²K) of
+#     `_sq_factors`;
+#   * S and Q are then not rebuilt at all but carried by the rank-1 recurrence of Tipping &
+#     Faul — the step the "fast" in fast marginal likelihood refers to. An action changes C
+#     by the rank-1 term (1/α_new - 1/α_old) φᵢφᵢᵀ, so by Sherman-Morrison every factor
+#     shifts by a multiple of e = ΦᵀC⁻¹φᵢ = φᵢᵀΦ - (Φ_Aᵀφᵢ)ᵀ Σ B, which costs O(kK):
+#         S ← S - e²/d,   Q ← Q - e Qᵢ/d,   d = 1/(1/α_new - 1/α_old) + Sᵢ,
+#     one expression covering all three actions (an addition has 1/α_old = 0, a deletion
+#     1/α_new = 0). No solve against the whole basis survives;
+#   * B is carried across actions too: an action changes the active set by a single column,
+#     so B gains or loses one row, O(PK) instead of O(PkK).
+#
+# A recurrence drifts, so it is anchored: eᵢ is φᵢᵀC⁻¹φᵢ evaluated afresh from B and the
+# active precision, which the carried Sᵢ must reproduce, and their disagreement measures the
+# drift accumulated since the last exact evaluation. Past `SQ_REFRESH_TOL` the action ends
+# with an exact `_sq_factors`, which in practice happens a handful of times in a whole run.
+#
+# The bound needs no re-solve either. With q(a) the exact posterior F is the log evidence, and
+# each action is its exact coordinate maximizer, so the evidence gain Δ of the chosen action
+# IS the increase of F: the history is accumulated from the bound of the empty model.
+#
 # Mutates src_pos (positions may move); returns the indices of the surviving sources, the
 # precisions of their columns, and the evidence-bound history.
 function _add_sources!(src_pos, medium, bd, iscomplex::Bool, W, w, d_m::Int, Σδx,
@@ -584,9 +635,28 @@ function _add_sources!(src_pos, medium, bd, iscomplex::Bool, W, w, d_m::Int, Σ�
 
     α = fill(Inf, K)
     elbo = Float64[]
-    F_prev = 0.0
     pts = mean_points(bd)
     clearance = _boundary_spacing(pts) / 2
+
+    # quantities of the whole candidate basis: they change only when Φ does, i.e. only when
+    # a source position moves
+    Φnorm2 = vec(sum(abs2, Φ; dims = 1))
+    Φtĝ = transpose(Φ) * ĝ
+
+    # The active columns `bcols`, in activation order, and their rows B = Φ_Aᵀ Φ of the Gram
+    # matrix: an addition appends a row and a deletion swaps in the last one, so each row is
+    # formed once per activation. `B` is a buffer grown geometrically, of which only the
+    # first `length(bcols)` rows are in use.
+    bcols = Int[]
+    B = Matrix{Float64}(undef, 0, K)
+
+    # the sparsity and quality factors, carried across actions by the recurrence below. With
+    # no active column C = I, so they start at their anchor values diag(ΦᵀΦ) and Φᵀĝ.
+    S, Q = _sq_factors(Φnorm2, Φtĝ, view(B, eachindex(bcols), :), bcols, α)
+
+    # the bound of the empty model, from which the history is accumulated: no coefficients,
+    # so the KL term vanishes and the expected misfit is ‖ĝ‖²
+    F_prev = _elbo(dot(ĝ, ĝ), Nr, noise_logdet, Float64[], Float64[], zeros(0, 0), 0.0)
 
     # one action per iteration, so this phase needs its own budget: a negative
     # `max_select_iters` asks for the automatic four-per-candidate-coefficient safety net
@@ -594,17 +664,11 @@ function _add_sources!(src_pos, medium, bd, iscomplex::Bool, W, w, d_m::Int, Σ�
     budget < 0 && (budget = 4K)
 
     for _ in 1:budget
-        active = findall(isfinite, α)
-
-        # the evidence covariance C = I + Φ_A A⁻¹ Φ_Aᵀ of the active model, and the factors
-        # S = φᵢᵀC⁻¹φᵢ (sparsity) and Q = φᵢᵀC⁻¹ĝ (quality) of every candidate column
-        ΦA = Φ[:, active]
-        C = _safe_cholesky(ΦA * Diagonal(1 ./ α[active]) * transpose(ΦA) + I)
-        S = vec(sum(Φ .* (C \ Φ); dims = 1))
-        Q = transpose(Φ) * (C \ ĝ)
-
         # the single best action: for each column the leave-one-out factors s, q of
-        # eq. (sq_factors), its optimal precision eq. (alpha_star), and the evidence gain
+        # eq. (sq_factors), its optimal precision eq. (alpha_star), and the evidence gain.
+        # S is a Schur complement and so non-negative; rounding can push it just below zero
+        # for a column that the active set already explains to machine precision, and the
+        # `s > 0` guard drops such a column as uninformative.
         best_i, best_Δ, best_α = 0, solver.elbo_tol * (1 + abs(F_prev)), Inf
         for i in 1:K
             s, q = if isinf(α[i])
@@ -613,7 +677,7 @@ function _add_sources!(src_pos, medium, bd, iscomplex::Bool, W, w, d_m::Int, Σ�
                 den = max(α[i] - S[i], 1e-12 * α[i])
                 (α[i] * S[i] / den, α[i] * Q[i] / den)
             end
-            α_i = q^2 > s ? s^2 / (q^2 - s) : Inf
+            α_i = (s > 0 && q^2 > s) ? s^2 / (q^2 - s) : Inf
             Δ = _log_evidence_1(α_i, s, q) - _log_evidence_1(α[i], s, q)
             if Δ > best_Δ
                 best_i, best_Δ, best_α = i, Δ, α_i
@@ -622,9 +686,51 @@ function _add_sources!(src_pos, medium, bd, iscomplex::Bool, W, w, d_m::Int, Σ�
         best_i == 0 && break        # no action improves the evidence: converged
 
         added = isinf(α[best_i])
+        deleted = !added && isinf(best_α)
+        r = added ? 0 : findfirst(==(best_i), bcols)     # the row of column best_i in B
+
+        # e = ΦᵀC⁻¹φᵢ = φᵢᵀΦ - (Φ_Aᵀφᵢ)ᵀ Σ B, the direction along which this action shifts
+        # every S and Q, all of it from the CURRENT active model. The Gram row φᵢᵀΦ is in B
+        # already unless the column is being added, in which case it is the row B is about to
+        # gain anyway; Σ acts through the Cholesky of the active precision Φ_AᵀΦ_A + A.
+        Bv = view(B, eachindex(bcols), :)
+        gram_i = added ? transpose(Φ) * view(Φ, :, best_i) : B[r, :]
+        L = _safe_cholesky(Bv[:, bcols] + Diagonal(α[bcols])).L
+        e = gram_i .- transpose(Bv) * (transpose(L) \ (L \ Bv[:, best_i]))
+
+        # eᵢ is φᵢᵀC⁻¹φᵢ freshly evaluated, which the carried Sᵢ must reproduce: how far apart
+        # they are is the drift the recurrence has accumulated
+        drifted = abs(e[best_i] - S[best_i]) > SQ_REFRESH_TOL * Φnorm2[best_i]
+
+        # Sherman-Morrison, one expression for all three actions: an addition comes from
+        # α_old = ∞ and a deletion from α_new = ∞
+        κinv = added ? best_α :
+            deleted ? -α[best_i] : α[best_i] * best_α / (α[best_i] - best_α)
+        d = κinv + S[best_i]
+        Qi = Q[best_i]
+        @. S -= e^2 / d
+        @. Q -= e * Qi / d
+
         α[best_i] = best_α
 
+        # keep B in step with the active set: one row appended, or one swapped out
+        if added
+            nb = length(bcols) + 1
+            if nb > size(B, 1)
+                Bnew = Matrix{Float64}(undef, max(8, 2 * size(B, 1)), K)
+                copyto!(view(Bnew, 1:(nb - 1), :), view(B, 1:(nb - 1), :))
+                B = Bnew
+            end
+            copyto!(view(B, nb, :), gram_i)
+            push!(bcols, best_i)
+        elseif deleted
+            copyto!(view(B, r, :), view(B, length(bcols), :))
+            bcols[r] = bcols[end]
+            pop!(bcols)
+        end
+
         # refine the position of the newly added source by a few gradient-descent steps
+        moved = false
         if added && solver.options.optimise_source_positions_flag && solver.options.source_position_iters > 0
             j = mod(best_i - 1, n_src * FD) ÷ FD + 1
             cols = _source_columns(j, n_src, FD, iscomplex)
@@ -641,18 +747,31 @@ function _add_sources!(src_pos, medium, bd, iscomplex::Bool, W, w, d_m::Int, Σ�
             end
         end
 
-        # monitor the bound: with q(a) the exact posterior it equals the log evidence
-        keep = findall(isfinite, α)
-        μ, Σpost, logdetΣ = _coefficient_posterior(Φ[:, keep], α[keep], ĝ)
-        R = _expected_misfit(Φ[:, keep], μ, Σpost, ĝ)
-        F = _elbo(R, Nr, noise_logdet, α[keep], μ, Σpost, logdetΣ)
-        push!(elbo, F)
-        F_prev = F
+        # monitor the bound: the chosen action is the exact coordinate maximizer of the
+        # evidence, so its gain is the increase of F. A source that moved changes Φ, and with
+        # it every cached quantity and the bound itself, so there everything is rebuilt.
+        if moved
+            Φnorm2 = vec(sum(abs2, Φ; dims = 1))
+            Φtĝ = transpose(Φ) * ĝ
+            isempty(bcols) || mul!(view(B, eachindex(bcols), :), transpose(Φ[:, bcols]), Φ)
+            μ, Σpost, logdetΣ = _coefficient_posterior(Φ[:, bcols], α[bcols], ĝ)
+            R = _expected_misfit(Φ[:, bcols], μ, Σpost, ĝ)
+            F_prev = _elbo(R, Nr, noise_logdet, α[bcols], μ, Σpost, logdetΣ)
+        else
+            F_prev += best_Δ
+        end
+        push!(elbo, F_prev)
+
+        # re-anchor the recurrence when its drift shows, or when a moved source invalidated
+        # the basis it is built on
+        if drifted || moved
+            S, Q = _sq_factors(Φnorm2, Φtĝ, view(B, eachindex(bcols), :), bcols, α)
+        end
     end
 
     if !any(isfinite, α)
         @warn "no candidate source explains the data beyond the noise; keeping the best one"
-        i = argmax(abs2.(transpose(Φ) * ĝ) ./ vec(sum(abs2, Φ; dims = 1)))
+        i = argmax(abs2.(Φtĝ) ./ Φnorm2)
         α[i] = ALPHA_CAP
     end
 

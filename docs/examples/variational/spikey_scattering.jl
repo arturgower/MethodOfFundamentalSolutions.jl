@@ -156,7 +156,7 @@ bd_train = BoundaryData(TractionType();
 # near the sensor spacing, so no source can hide between two sensors and blow up the field
 # there unseen.
 spacing = 0.04
-clearance = 0.04
+clearance = 0.02
 curve_pts = vcat([[boundary_point(o, θ) for θ in LinRange(0, 2π, 1501)[1:1500]] for o in obstacles]...)
 xs = [p[1] for p in pts]; ys = [p[2] for p in pts]
 grid = [SVector(x, y)
@@ -177,12 +177,12 @@ end
 # Selection performs ONE action (add, re-estimate or delete a single coefficient) per iteration,
 # so it has its own budget `max_select_iters`, separate from the `max_iters` whole-model sweeps:
 # we leave it at its default, which allows four actions per candidate coefficient and stops the
-# moment no action increases the evidence (about 2000 actions here). No `prior_variance` either:
+# moment no action increases the evidence (about 1650 actions here). No `prior_variance` either:
 # the selection phase derives every precision from the data, so an initial value is ignored.
 #
-# This is the expensive step of the example — a few minutes to sift 2600-odd candidates against
-# 1200 data rows. It is also the step you only pay once: that is the whole point of selecting the
-# sources for a ring of incidences and then reusing them.
+# This is the expensive step of the example — ten seconds or so to sift 2800-odd candidates
+# against 1200 data rows. It is also the step you only pay once: that is the whole point of
+# selecting the sources for a ring of incidences and then reusing them.
 # ---------------------------------------------------------------------------------------------
 solver = VariationalBayesianSolver(
     ard_threshold = 1e6,
