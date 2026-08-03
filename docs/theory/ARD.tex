@@ -1,0 +1,411 @@
+\documentclass[a4paper]{article}
+\usepackage[margin=2cm]{geometry}
+\usepackage{graphicx} % Required for inserting images
+\usepackage{amsmath}% Required for inserting images
+\usepackage{amssymb} % for \mathbb
+\usepackage{comment}
+\usepackage{hyperref}
+\usepackage{cleveref}
+\usepackage{subcaption}
+\usepackage{algorithm}
+\usepackage{algpseudocode}
+
+\usepackage{authblk}
+
+
+\newcommand{\im}{\mathrm{i}}
+\newcommand{\ii}{\mathrm{i}}
+\newcommand{\ee}{\mathrm{e}}
+\renewcommand{\vec}[1]{\boldsymbol{#1}}
+
+\usepackage[
+  autocite    = superscript,
+  backend     = bibtex,
+  sortcites   = true,
+  style       = numeric,
+  doi=false, url=true, isbn=false,
+  maxcitenames=2, maxbibnames=2
+  ]{biblatex}
+\addbibresource{references.bib}
+
+\title{Automatica Relevance Determination and extensions}
+
+\date{\vspace{-5ex}}
+
+\author{Art L.\ Gower${}^1$}
+\affil{Department of Mechanical, Aerospace and Civil Engineering, \\ The University of Sheffield, UK}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+Some brief notes on deducing Relevant Vector Machines and Automatic Relevance Determination from the evidence. The novelty is possibly in the low noise limit where we can clearly understand the admission and pruning of basis functions. The sequential algorithm is also described, and the low noise limit is used to show when it will recover the exact basis.
+\end{abstract}
+
+\section{Introduction}
+
+Given some data $\mathbf y$ and a basis $\phi_i(\mathbf x)$, we consider the linear model
+\begin{equation} \label{eq:linear_model}
+    y(\mathbf x) = \sum_{m=1}^M a_m \phi_m(\mathbf x) + \epsilon, \qquad \epsilon \sim \mathcal N(0, \sigma_\epsilon^2(\mathbf x)),
+\end{equation}
+where ${\sigma}_\epsilon(\mathbf x)^2$ is the noise covariance. Evaluating the above for a set of inputs $\mathbf x_n$ gives the matrix-vector form
+\begin{equation}
+    \mathbf{y} = \mathbf{\Phi} \mathbf{a} + \boldsymbol{\epsilon}, \qquad \boldsymbol{\epsilon} \sim \mathcal{N}(\mathbf{0}, \mathbf{\Sigma}_\epsilon),
+\end{equation}
+where $\mathbf{y} = [y(\mathbf{x}_1), \dots, y(\mathbf{x}_N)]^\top$, $\mathbf{\Phi}$ is the design matrix with elements $\Phi_{nm} = \phi_m(\mathbf{x}_n)$, $\mathbf{a} = [a_1, \dots, a_M]^\top$, and $\mathbf{\Sigma}_\epsilon = \mathrm{diag}(\sigma_\epsilon^2(\mathbf{x}_1), \dots, \sigma_\epsilon^2(\mathbf{x}_N))$. From the above we have the likelihood
+\begin{equation}
+    p(\mathbf{y}|\mathbf{a}) = \mathcal{N}(\mathbf{y}|\mathbf{\Phi}\mathbf{a}, \mathbf{\Sigma}_\epsilon).
+\end{equation}
+
+
+If the number of basis functions $M$ is larger than quantity of data $N$, we want to efficiently determine which basis functions are most relevant. We do this with ARD = Automatic Relevance Determination.
+
+Assume independent Gaussian priors on the coefficients $a_i$ with precision $\alpha_i$, then by using Bayes theorem followed by completing the square (calculations commented out), the posterior distribution is
+\begin{equation}
+    p(\mathbf{a}|\mathbf{y}) = \mathcal{N}(\mathbf a |\mathbf{\mu}, \mathbf{\Sigma}),
+\end{equation}
+where
+\begin{equation} \label{eq:posterior}
+    \mathbf{\Sigma} = (\mathbf{\Phi}^\top \mathbf{\Sigma}_\epsilon^{-1} \mathbf{\Phi} + \mathbf{A})^{-1}, \qquad
+    \mathbf{\mu} = \mathbf{\Sigma} \mathbf{\Phi}^\top \mathbf{\Sigma}_\epsilon^{-1} \mathbf{y},
+\end{equation}
+and $\mathbf{A} = \mathrm{diag}(\alpha_1, \alpha_2, \dots)$.
+
+%% Begin posterior calculation
+    % To deduce this result we use Bayes' theorem
+    % \begin{equation} \label{eq:bayes}
+    %     p(\mathbf{a}|\mathbf{y}) = \frac{p(\mathbf{y}|\mathbf{a}) \, p(\mathbf{a})}{p(\mathbf{y})} = \frac{\mathcal{N}(\mathbf{y}|\mathbf{\Phi}\mathbf{a}, \mathbf{\Sigma}_\epsilon) \, \mathcal{N}(\mathbf{a}|\mathbf{0}, \mathbf{A}^{-1})}{p(\mathbf{y})},
+    % \end{equation}
+    % where the prior $p(\mathbf a) = \mathcal N(\mathbf a| \mathbf 0, \mathbf A^{-1})$ follows from assuming that each $a_m$ is independent with zero mean and precision $\alpha_m$, that is $\mathbf A^{-1} = \mathrm{diag}(\alpha_1^{-1}, \alpha_2^{-1}, \dots)$ is the prior covariance.
+
+    % The denominator $p(\mathbf y)$ does not depend on $\mathbf a$, and neither do the normalisation constants of the two Gaussians, so we can write
+    % \begin{equation} \label{eq:proportional}
+    %     p(\mathbf{a}|\mathbf{y}) \propto \exp \left( - \tfrac{1}{2} Q(\mathbf a) \right),
+    % \end{equation}
+    % where $Q$ collects every term of the two exponents,
+    % \begin{equation} \label{eq:Q}
+    %     Q(\mathbf a) = (\mathbf{y} - \mathbf{\Phi}\mathbf{a})^\top \mathbf{\Sigma}_\epsilon^{-1} (\mathbf{y} - \mathbf{\Phi}\mathbf{a}) + \mathbf{a}^\top \mathbf{A} \mathbf{a}.
+    % \end{equation}
+    % As $Q$ is a quadratic in $\mathbf a$, the posterior has to be a Gaussian in $\mathbf a$; to identify its mean and covariance we just need to rewrite $Q$ in the form $(\mathbf a - \mathbf \mu)^\top \mathbf \Sigma^{-1} (\mathbf a - \mathbf \mu) + \text{const}$, which is called completing the square.
+
+    % \paragraph{Step 1: expand.} Expanding the first term of \eqref{eq:Q}, and using that $\mathbf{\Sigma}_\epsilon^{-1}$ is symmetric so that $\mathbf{a}^\top \mathbf{\Phi}^\top \mathbf{\Sigma}_\epsilon^{-1} \mathbf{y} = \mathbf{y}^\top \mathbf{\Sigma}_\epsilon^{-1} \mathbf{\Phi} \mathbf{a}$ (both are scalars), gives
+    % \begin{gather}
+    %     Q(\mathbf a) = \mathbf{y}^\top \mathbf{\Sigma}_\epsilon^{-1} \mathbf{y} - 2 \mathbf{a}^\top \mathbf{\Phi}^\top \mathbf{\Sigma}_\epsilon^{-1} \mathbf{y} + \mathbf{a}^\top \mathbf{\Phi}^\top \mathbf{\Sigma}_\epsilon^{-1} \mathbf{\Phi} \mathbf{a} + \mathbf{a}^\top \mathbf{A} \mathbf{a}
+    %     \\
+    %     = \mathbf{a}^\top \left( \mathbf{\Phi}^\top \mathbf{\Sigma}_\epsilon^{-1} \mathbf{\Phi} + \mathbf{A} \right) \mathbf{a} - 2 \mathbf{a}^\top \mathbf{\Phi}^\top \mathbf{\Sigma}_\epsilon^{-1} \mathbf{y} + \mathbf{y}^\top \mathbf{\Sigma}_\epsilon^{-1} \mathbf{y}.
+    % \end{gather}
+
+    % \paragraph{Step 2: name the quadratic and linear coefficients.} Define
+    % \begin{equation} \label{eq:definitions}
+    %     \mathbf{\Sigma}^{-1} := \mathbf{\Phi}^\top \mathbf{\Sigma}_\epsilon^{-1} \mathbf{\Phi} + \mathbf{A}, \qquad \mathbf{b} := \mathbf{\Phi}^\top \mathbf{\Sigma}_\epsilon^{-1} \mathbf{y},
+    % \end{equation}
+    % so that
+    % \begin{equation}
+    %     Q(\mathbf a) = \mathbf{a}^\top \mathbf{\Sigma}^{-1} \mathbf{a} - 2 \mathbf{a}^\top \mathbf{b} + \mathbf{y}^\top \mathbf{\Sigma}_\epsilon^{-1} \mathbf{y}.
+    % \end{equation}
+    % Note that $\mathbf{\Sigma}^{-1}$ is symmetric and positive definite: $\mathbf{\Phi}^\top \mathbf{\Sigma}_\epsilon^{-1} \mathbf{\Phi}$ is positive semi-definite and $\mathbf A$ is positive definite when every $\alpha_m > 0$. Hence $\mathbf{\Sigma}^{-1}$ is invertible, which is what makes the next step possible even when $M > N$.
+
+    % \paragraph{Step 3: complete the square.} For any vector $\mathbf \mu$ we have the identity
+    % \begin{equation}
+    %     (\mathbf a - \mathbf \mu)^\top \mathbf{\Sigma}^{-1} (\mathbf a - \mathbf \mu) = \mathbf{a}^\top \mathbf{\Sigma}^{-1} \mathbf{a} - 2 \mathbf{a}^\top \mathbf{\Sigma}^{-1} \mathbf \mu + \mathbf \mu^\top \mathbf{\Sigma}^{-1} \mathbf \mu,
+    % \end{equation}
+    % where we again used the symmetry of $\mathbf{\Sigma}^{-1}$ to combine the two cross terms. Comparing the linear terms with those of $Q$, we need $\mathbf{\Sigma}^{-1} \mathbf \mu = \mathbf{b}$, that is
+    % \begin{equation} \label{eq:mu}
+    %     \mathbf \mu = \mathbf{\Sigma} \mathbf{b} = \mathbf{\Sigma} \mathbf{\Phi}^\top \mathbf{\Sigma}_\epsilon^{-1} \mathbf{y}.
+    % \end{equation}
+    % With this choice of $\mathbf \mu$ we can add and subtract $\mathbf \mu^\top \mathbf{\Sigma}^{-1} \mathbf \mu$ to reach
+    % \begin{equation} \label{eq:completed}
+    %     Q(\mathbf a) = (\mathbf a - \mathbf \mu)^\top \mathbf{\Sigma}^{-1} (\mathbf a - \mathbf \mu) \underbrace{- \, \mathbf \mu^\top \mathbf{\Sigma}^{-1} \mathbf \mu + \mathbf{y}^\top \mathbf{\Sigma}_\epsilon^{-1} \mathbf{y}}_{\text{independent of } \mathbf a}.
+    % \end{equation}
+
+    % \paragraph{Step 4: read off the posterior.} Substituting \eqref{eq:completed} into \eqref{eq:proportional}, the $\mathbf a$-independent terms are absorbed into the normalisation constant, leaving
+    % \begin{equation}
+    %     p(\mathbf{a}|\mathbf{y}) \propto \exp \left( - \tfrac{1}{2} (\mathbf a - \mathbf \mu)^\top \mathbf{\Sigma}^{-1} (\mathbf a - \mathbf \mu) \right),
+    % \end{equation}
+    % which we recognise as an unnormalised Gaussian with mean $\mathbf \mu$ and covariance $\mathbf \Sigma$. Since a probability density is fixed by its dependence on $\mathbf a$ together with the requirement that it integrates to one, we conclude
+    % \begin{gather}
+    %     p(\mathbf{a}|\mathbf{y}) = \mathcal{N}(\mathbf a| \mathbf{\mu}, \mathbf{\Sigma}),
+    %     \\
+    %     \mathbf{\Sigma} = (\mathbf{\Phi}^\top \mathbf{\Sigma}_\epsilon^{-1} \mathbf{\Phi} + \mathbf{A})^{-1}, \qquad
+    %     \mathbf{\mu} = \mathbf{\Sigma} \mathbf{\Phi}^\top \mathbf{\Sigma}_\epsilon^{-1} \mathbf{y}.
+    % \end{gather}
+%% End posterior calculation
+
+    % For later use we note that the leftover constant in \eqref{eq:completed} is exactly what determines the evidence $p(\mathbf y)$: integrating $\exp(-Q/2)$ over $\mathbf a$ gives $(2\pi)^{M/2} |\mathbf \Sigma|^{1/2}$ times the constant term, so
+By integrating the joint distribution $p(\mathbf y, \mathbf a) = p(\mathbf y|\mathbf a) p(\mathbf a)$ over $\mathbf a$ we  compute the evidence:
+\begin{equation} \label{eq:evidence}
+    p(\mathbf y) = \frac{|\mathbf \Sigma|^{1/2} \, |\mathbf A|^{1/2}}{(2 \pi)^{N/2} |\mathbf \Sigma_\epsilon|^{1/2}} \exp \left( - \tfrac{1}{2} \mathbf{y}^\top \mathbf{\Sigma}_\epsilon^{-1} \mathbf{y} + \tfrac{1}{2} \mathbf \mu^\top \mathbf{\Sigma}^{-1} \mathbf \mu \right),
+\end{equation}
+which is the quantity maximised over the $\alpha_m$ in ARD.
+
+
+
+\subsection{General solution}
+
+When $M > N$ the $M$ columns $\vec \phi_m \in \mathbb{R}^N$ cannot be an independent set of vectors, since at most $N$ vectors can be. Marginalising $\mathbf a$ out of $p(\mathbf y|\mathbf a) p(\mathbf a)$ directly, using that $\mathbf y = \mathbf{\Phi} \mathbf a + \vec \epsilon$ is a sum of independent Gaussians, gives $p(\mathbf y) = \mathcal N (\mathbf y | \mathbf 0, \mathbf C)$ with
+\begin{equation} \label{eq:C}
+    \mathbf C = \mathbf \Sigma_\epsilon + \mathbf{\Phi} \mathbf{A}^{-1} \mathbf{\Phi}^\top = \beta^{-1} \mathbf{I} + \sum_m \alpha_m^{-1} \vec \phi_m \vec \phi_m^\top,
+\end{equation}
+that is
+\begin{equation} \label{eq:evidence_C}
+    p(\mathbf y) = \frac{|\mathbf C|^{-1/2}}{(2 \pi)^{N/2}} \exp \left( -\frac{1}{2} \mathbf y^\top \mathbf C^{-1} \mathbf y \right).
+\end{equation}
+This is equivalent to \eqref{eq:evidence}. When $M>N$, which does not really happen with the sequential greedy algorithm, it is more useful as $\mathbf C$ is $N \times N$ however large $M$ is. One clear advantage is that each basis function enters it through a single rank-one term $\alpha_m^{-1} \vec \phi_m \vec \phi_m^\top$ so that sending $\alpha_m \to \infty$ deletes that term entirely and prunes $\phi_m$ from the model. Throughout we take the noise to be isotropic, $\mathbf \Sigma_\epsilon = \beta^{-1}\mathbf{I}$, and normalise the basis functions so that $\|\vec \phi_m\| = 1$.
+
+To prepare for the sequential algorithm we need consider that $\mathbf \Phi$ contains a subset of all the basis functions. The process below shows how to either update the precision $\alpha_m$ of a basis already in the set, delete it by setting $\alpha_m \to \infty$, or add a new basis function by introducing a finite $\alpha_m$.
+
+To update or add $\alpha_m$, Split off the rank-one contribution of $\phi_m$ in \eqref{eq:C},
+\begin{equation} \label{eq:Csplit}
+    \mathbf C = \mathbf C_{-m} + \alpha_m^{-1} \vec \phi_m \vec \phi_m^\top,
+    \qquad
+    \mathbf C_{-m} := \beta^{-1} \mathbf{I} + \sum_{j \neq m} \alpha_j^{-1} \vec \phi_j \vec \phi_j^\top.
+\end{equation}
+For what follows, $\mathbf C_{-m}$ could be anything, as long as it is invertible, and the split \eqref{eq:Csplit}${}_1$ holds. This will allow us to use ARD for other forms of the evidence covariance.
+
+The matrix determinant lemma and the Sherman--Morrison formula applied to \eqref{eq:Csplit} give
+\begin{align} \label{eq:det rank 1}
+    & |\mathbf C| = |\mathbf C_{-m}| \, \frac{\alpha_m + s_m}{\alpha_m},
+    \\
+    \label{eq:inverse rank 1}
+    & \mathbf C^{-1} = \mathbf C_{-m}^{-1} - \frac{\mathbf C_{-m}^{-1} \vec \phi_m \vec \phi_m^\top \mathbf C_{-m}^{-1}}{\alpha_m + s_m}
+    \quad \implies \quad
+    \mathbf y^\top \mathbf C^{-1} \mathbf y = \mathbf y^\top \mathbf C_{-m}^{-1} \mathbf y - \frac{q_m^2}{\alpha_m + s_m},
+\end{align}
+where we defined the \emph{sparsity} $s_m$ and the \emph{quality} $q_m$ of the basis function $\phi_m$ \autocite{tipping2003fast},
+\begin{equation} \label{eq:sq}
+    s_m := \vec \phi_m^\top \mathbf C_{-m}^{-1} \vec \phi_m > 0 \quad \text{and} \quad 
+    q_m := \vec \phi_m^\top \mathbf C_{-m}^{-1} \mathbf y.
+\end{equation}
+
+Substituting \eqref{eq:det rank 1} and \eqref{eq:inverse rank 1} into \eqref{eq:evidence_C}, every term involving $\alpha_m$ collects into a single function of it,
+\begin{equation} \label{eq:ell}
+    \log p(\mathbf y) = \mathcal L_{-m} + \ell(\alpha_m),
+    \qquad
+    \ell(\alpha) = \frac{1}{2} \left[ \log \alpha - \log (\alpha + s_m) + \frac{q_m^2}{\alpha + s_m} \right],
+\end{equation}
+with $\mathcal L_{-m}$ the log-evidence of the model without $\phi_m$, which is independent of $\alpha_m$. Fortunately, we can explicity calculate the $\alpha_m$ which is the global maximum of $\ell(\alpha_m)$. To do so, we differentiate \eqref{eq:ell} with respect to $\alpha$ to reach
+\begin{equation}
+    \frac{\mathrm d \ell}{\mathrm d \alpha} = \frac{1}{2} \, \frac{\alpha (s_m - q_m^2) + s_m^2}{\alpha (\alpha + s_m)^2},
+\end{equation}
+whose numerator is a straight line in $\alpha$, positive at $\alpha = 0$. If $q_m^2 > s_m$ it changes sign once and $\ell$ has an interior maximum; if $q_m^2 \leq s_m$ it never changes sign, $\ell$ increases monotonically, and the maximum is at $\alpha_m \to \infty$. Hence
+\begin{equation} \label{eq:alpha_opt_general}
+    \alpha_m = \frac{s_m^2}{q_m^2 - s_m} \;\; \text{ if } \;\; q_m^2 > s_m,
+    \qquad \alpha_m \to \infty \;\; \text{ otherwise.}
+\end{equation}
+
+Below we show how this result leads to an efficient sequential algorithm to determine the basis, and in \Cref{sec:exact_basis} we give an intuitive explanation of why it works by taking the small noise limit.
+
+\subsection{A sequential algorithm}
+
+Because each application of \eqref{eq:alpha_opt_general} maximises the exact evidence over a single $\alpha_m$ with all the others held fixed, sweeping it across candidates is a coordinate ascent on $\log p(\mathbf y)$: every add, delete or re-estimate increases the evidence, which is bounded for fixed $\beta$, so the iteration converges \autocite{tipping2003fast}. To choose the best move at each step we need the value of the maximum of \eqref{eq:ell}. Substituting $\alpha_m = s_m^2/(q_m^2 - s_m)$ into $\ell$ gives
+\begin{equation} \label{eq:ell_max}
+    \ell_m^\star = \frac{1}{2} \left[ \frac{q_m^2 - s_m}{s_m} - \log \frac{q_m^2}{s_m} \right] \geq 0,
+\end{equation}
+and with the convention $\ell(\infty) = 0$ for a pruned function, the evidence gained by any of the three moves is the single expression
+\begin{equation} \label{eq:delta_ell}
+    \Delta \ell_m = \ell(\alpha_m^{\mathrm{new}}) - \ell(\alpha_m^{\mathrm{old}}),
+\end{equation}
+covering addition ($\alpha_m^{\mathrm{old}} = \infty$), deletion ($\alpha_m^{\mathrm{new}} = \infty$) and re-estimation.
+
+The remaining question is cost: taken literally, $s_m$ and $q_m$ require $\mathbf C_{-m}^{-1}$, a different $N \times N$ inverse for every candidate. Two identities remove this. First, maintain instead the pair computed from the covariance $\mathbf C$ of the \emph{current} model, common to all candidates,
+\begin{equation} \label{eq:SQ}
+    S_m := \vec \phi_m^\top \mathbf C^{-1} \vec \phi_m,
+    \qquad
+    Q_m := \vec \phi_m^\top \mathbf C^{-1} \mathbf y;
+\end{equation}
+applying Sherman--Morrison to $\mathbf C_{-m} = \mathbf C - \alpha_m^{-1} \vec \phi_m \vec \phi_m^\top$ converts them exactly,
+\begin{equation} \label{eq:sq_from_SQ}
+    s_m = \frac{\alpha_m S_m}{\alpha_m - S_m},
+    \qquad
+    q_m = \frac{\alpha_m Q_m}{\alpha_m - S_m},
+\end{equation}
+which reduces to $s_m = S_m$, $q_m = Q_m$ for a pruned $\phi_m$. Second, when only the functions in a set $S$ are retained, $|S| = k$, the Woodbury identity applied to \eqref{eq:C} gives
+\begin{equation}
+    \mathbf C^{-1} = \beta \mathbf I - \beta^2 \mathbf \Phi_S \mathbf \Sigma_S \mathbf \Phi_S^\top,
+\end{equation}
+where $\mathbf \Sigma_S = (\mathbf A_S + \beta \mathbf \Phi_S^\top \mathbf \Phi_S)^{-1}$ and $\vec \mu_S = \beta \mathbf \Sigma_S \mathbf \Phi_S^\top \mathbf y$ are the posterior covariance and mean \eqref{eq:posterior} restricted to the retained set, so that
+\begin{equation} \label{eq:SQ_practical}
+    S_m = \beta - \beta^2 \, (\mathbf \Phi_S^\top \vec \phi_m)^\top \mathbf \Sigma_S \, (\mathbf \Phi_S^\top \vec \phi_m),
+    \qquad
+    Q_m = \beta \, \vec \phi_m^\top (\mathbf y - \mathbf \Phi_S \vec \mu_S).
+\end{equation}
+Everything is assembled from the $k \times k$ matrix $\mathbf \Sigma_S$ and the current residual $\mathbf y - \mathbf \Phi_S \vec \mu_S$; no $N \times N$ or $M \times M$ matrix is ever formed. The second formula also exposes what the algorithm is doing: $Q_m$ is $\beta$ times the correlation of $\phi_m$ with the \emph{residual}, so the sweep is a matching pursuit on residuals, with $S_m$ discounting whatever the retained functions already explain. Given the inner products $\vec \phi_j^\top \vec \phi_m$ and $\vec \phi_m^\top \mathbf y$, evaluating \eqref{eq:SQ_practical} for all $M$ candidates costs $O(M k^2)$; \Cref{sec:rank_one} shows that after each accepted move the pairs $(S_m, Q_m)$ need not be recomputed at all, but follow from a rank-one recurrence costing $O(Mk)$ \autocite{tipping2003fast}. Algorithm~\ref{alg:seq_ard} collects the loop. If the noise level is unknown, $\beta$ can be re-estimated between sweeps from $\beta^{-1} = \|\mathbf y - \mathbf \Phi_S \vec \mu_S\|^2 / (N - k + \sum_{j \in S} \alpha_j [\mathbf \Sigma_S]_{jj})$.
+
+\begin{algorithm}
+\caption{Sequential ARD by greedy evidence maximisation \autocite{tipping2003fast}.}
+\label{alg:seq_ard}
+\begin{algorithmic}[1]
+\Require data $\mathbf y$, candidates $\{\vec \phi_m\}_{m=1}^M$ with $\|\vec \phi_m\| = 1$, noise precision $\beta$
+\State $S \gets \emptyset$; \quad $\alpha_m \gets \infty$ for all $m$; \quad $S_m \gets \beta$, $Q_m \gets \beta \, \vec \phi_m^\top \mathbf y$; \quad $\mathcal L \gets$ \eqref{eq:evidence_empty}
+\Repeat
+    \State $(s_m, q_m) \gets$ \eqref{eq:sq_from_SQ} for all $m$
+    \State $\alpha_m^{\mathrm{new}} \gets$ \eqref{eq:alpha_opt_general} and $\Delta \ell_m \gets$ \eqref{eq:delta_ell} for all $m$
+    \State $m^\star \gets \arg\max_m \Delta \ell_m$
+    \State (Optional) use gradient descent to adjust $\vec \phi_{m^\star}$
+    \State $\vec e \gets$ \eqref{eq:e_practical} and $d \gets$ \eqref{eq:d_cases}, both from the model \emph{before} the move
+    \State apply the move for $m^\star$: add it to $S$, delete it from $S$, or re-estimate $\alpha_{m^\star}$
+    \State $(S_m, Q_m) \gets$ \eqref{eq:SQ_update} for all $m$; \quad $\mathcal L \gets \mathcal L + \Delta \ell_{m^\star}$
+\Until{$\Delta \ell_{m^\star}$ falls below tolerance}
+\State \Return retained set $S$, precisions $\alpha_j$, log-evidence $\mathcal L$, and $\vec \mu_S, \mathbf \Sigma_S$ from \eqref{eq:posterior}
+\end{algorithmic}
+\end{algorithm}
+
+The empty start of line~1 costs nothing: with $S = \emptyset$ we have $\mathbf C = \beta^{-1}\mathbf I$, so $s_m = S_m = \beta$ and $q_m = Q_m = \beta \, \vec \phi_m^\top \mathbf y$, and since \eqref{eq:ell_max} is increasing in $q_m^2/s_m = \beta (\vec \phi_m^\top \mathbf y)^2$ the first move is exactly the $\arg\max_m (\vec \phi_m^\top \mathbf y)^2$ one would have picked by hand.
+
+\subsection{Refreshing $S_m$ and $Q_m$: the rank-one recurrence} \label{sec:rank_one}
+
+Every move changes a single $\alpha_{m^\star}$, which by \eqref{eq:C} enters $\mathbf C$ through one rank-one term. Writing $\alpha^{\mathrm{old}}$ and $\alpha^{\mathrm{new}}$ for its values before and after the move,
+\begin{equation} \label{eq:C_move}
+    \mathbf C^{\mathrm{new}} = \mathbf C + \kappa \, \vec \phi_{m^\star} \vec \phi_{m^\star}^\top,
+    \qquad
+    \kappa = \frac{1}{\alpha^{\mathrm{new}}} - \frac{1}{\alpha^{\mathrm{old}}},
+\end{equation}
+with the convention $1/\infty = 0$, so that $\kappa = 1/\alpha^{\mathrm{new}}$ for an addition and $\kappa = -1/\alpha^{\mathrm{old}}$ for a deletion. Sherman--Morrison applied to \eqref{eq:C_move} gives
+\begin{equation} \label{eq:Cinv_move}
+    (\mathbf C^{\mathrm{new}})^{-1} = \mathbf C^{-1} - \frac{(\mathbf C^{-1} \vec \phi_{m^\star}) (\mathbf C^{-1} \vec \phi_{m^\star})^\top}{d},
+    \qquad
+    d := \kappa^{-1} + S_{m^\star},
+\end{equation}
+where $S_{m^\star}$ is already at hand. Contracting \eqref{eq:Cinv_move} with $\vec \phi_m$ on the left and with $\vec \phi_m$ or $\mathbf y$ on the right, and comparing with the definitions \eqref{eq:SQ}, every pair moves along the same direction
+\begin{equation} \label{eq:SQ_update}
+    S_m^{\mathrm{new}} = S_m - \frac{e_m^2}{d},
+    \qquad
+    Q_m^{\mathrm{new}} = Q_m - \frac{e_m \, Q_{m^\star}}{d},
+    \qquad
+    e_m := \vec \phi_m^\top \mathbf C^{-1} \vec \phi_{m^\star},
+\end{equation}
+and the three moves are told apart only by $d$,
+\begin{equation} \label{eq:d_cases}
+    \underbrace{d = \alpha^{\mathrm{new}} + S_{m^\star}}_{\text{add}},
+    \qquad
+    \underbrace{d = S_{m^\star} - \alpha^{\mathrm{old}}}_{\text{delete}},
+    \qquad
+    \underbrace{d = \frac{\alpha^{\mathrm{old}} \alpha^{\mathrm{new}}}{\alpha^{\mathrm{old}} - \alpha^{\mathrm{new}}} + S_{m^\star}}_{\text{re-estimate}}.
+\end{equation}
+
+Only the vector $\vec e$ is new work. Substituting the same Woodbury form of $\mathbf C^{-1}$ that gave \eqref{eq:SQ_practical},
+\begin{equation} \label{eq:e_practical}
+    \vec e = \beta \, \mathbf G_{:,m^\star} - \beta^2 \, \mathbf B^\top \mathbf \Sigma_S \mathbf B_{:,m^\star},
+    \qquad \text{with} \qquad
+    \mathbf G := \mathbf \Phi^\top \mathbf \Phi, \quad \mathbf B := \mathbf \Phi_S^\top \mathbf \Phi,
+\end{equation}
+so $\vec e$ costs $O(Mk)$: the $k \times M$ block $\mathbf B$ holds the rows of the Gram matrix belonging to the retained set, and $\mathbf \Sigma_S \mathbf B_{:,m^\star}$ is a single $k \times k$ solve. Neither is rebuilt from scratch. A move changes $S$ by one index, so $\mathbf B$ gains or loses one row --- $O(MN)$ for the one new row of inner products, and the row needed by an addition is the row $\mathbf B$ is about to gain anyway. The precision $\mathbf \Sigma_S^{-1} = \mathbf A_S + \beta \mathbf \Phi_S^\top \mathbf \Phi_S$ is likewise read off $\mathbf B$, since $\beta \mathbf \Phi_S^\top \mathbf \Phi_S$ is just the columns of $\mathbf B$ indexed by $S$.
+
+Two remarks. First, the diagonal entry of $\vec e$ reproduces the sparsity, $e_{m^\star} = S_{m^\star}$, by the definitions \eqref{eq:SQ}; since the left side is formed afresh from $\mathbf B$ and $\mathbf \Sigma_S$ while the right side is whatever the recurrence has carried, their difference is a free measure of the numerical drift accumulated since the last exact evaluation, and past a tolerance the pairs are re-anchored on \eqref{eq:SQ_practical}. Second, if line~6 of Algorithm~\ref{alg:seq_ard} moves $\vec \phi_{m^\star}$ itself, then $\mathbf G$, $\mathbf B$ and every $(S_m, Q_m)$ refer to a basis that no longer exists and must be rebuilt.
+
+\paragraph{The running evidence.} Because each move maximises the evidence exactly over one $\alpha_m$ with the others fixed, \eqref{eq:delta_ell} is the exact change in $\log p(\mathbf y)$. The log-evidence therefore needs no separate evaluation: it is the running sum of the accepted $\Delta \ell_{m^\star}$, started from the empty model, where $\mathbf C = \beta^{-1} \mathbf I$ and \eqref{eq:evidence_C} reduces to
+\begin{equation} \label{eq:evidence_empty}
+    \log p(\mathbf y) \big|_{S = \emptyset} = - \frac{1}{2} \left( N \log \frac{2 \pi}{\beta} + \beta \, \|\mathbf y\|^2 \right).
+\end{equation}
+
+\paragraph{Relation to the implementation.} \texttt{MethodOfFundamentalSolutions.jl} runs Algorithm~\ref{alg:seq_ard} on a \emph{whitened} model: with $\mathbf W$ any left square root of the noise precision, $\mathbf \Sigma_\epsilon^{-1} = \mathbf W^\top \mathbf W$, the pair $(\mathbf W \mathbf \Phi, \mathbf W \mathbf y)$ has identity noise covariance, which sets $\beta = 1$ everywhere above and lifts the restriction to isotropic noise. The columns are not normalised, so $\|\vec \phi_m\|^2$ takes the place of $\beta$ in \eqref{eq:SQ_practical} and $\mathbf G_{mm}$ the place of $1$ in \eqref{eq:e_practical}. The $k \times k$ matrix $\mathbf \Sigma_S$ is the only object refactorised at each move rather than updated by a recurrence: it is small, and re-deriving it from $\mathbf B$ keeps it exact, leaving \eqref{eq:SQ_update} as the only recurrence to drift. The posterior $(\vec \mu_S, \mathbf \Sigma_S)$ is needed only at the end, since the sweep itself reads the residual through $Q_m$ alone.
+
+
+\subsection{Low noise limit} \label{sec:exact_basis}
+
+Every move of the sequential algorithm --- add, delete or re-estimate --- is decided by the sparsity $s_m$ and the quality $q_m$ of \eqref{eq:sq}. Here we perform an asymptotic for low noise $\beta^{-1} \to 0$ to rewrite $s_m$ and $q_m$ as an intuitive representation. We then specialise the data $\mathbf y$ to be composed exactly of a subset of the basis, and use the same limit to determine when ARD recovers that subset exactly.
+
+% Before proceeding let us consider the simplest case. For the \emph{empty model}, $\mathbf C_{-m} = \beta^{-1} \mathbf I$, $s_m = \beta$, and $q_m = \beta \, \vec \phi_m^\top \mathbf y$. A first basis function is admitted only if $(\hat{\vec \phi}_m^\top \mathbf y)^2 > \beta^{-1}$, that is if its correlation with the data beats the noise, and it enters with prior variance $\alpha_m^{-1} = (\hat{\vec \phi}_m^\top \mathbf y)^2 - \beta^{-1}$, its squared correlation with the noise's share subtracted. This variance is exactly enough to learn a posterior mean for $a_m = \vec \phi_m^\top \mathbf y$.
+
+% \subsubsection{The low noise limit} 
+Consider a model that retains the set $S$, whose columns $\mathbf \Phi_S$ we take to be linearly independent, with rank $r = |S|$, so that its covariance \eqref{eq:C} is
+\begin{equation} \label{eq:CS}
+    \mathbf C_S = \beta^{-1} \mathbf I + \mathbf \Phi_S \mathbf A_S^{-1} \mathbf \Phi_S^\top.
+\end{equation}
+The rank-$r$ matrix $\mathbf \Phi_S \mathbf A_S^{-1} \mathbf \Phi_S^\top$ acts only within $\mathrm{span}(\mathbf \Phi_S)$, so $\mathbf C_S$ is block diagonal with respect to the split of $\mathbb R^N$ into $\mathrm{span}(\mathbf \Phi_S)$, where its eigenvalues are $O(1)$, and the $(N-r)$-dimensional orthogonal complement where every eigenvalue equals $\beta^{-1}$. Inverting each block separately gives
+\begin{equation} \label{eq:Cinv_expansion}
+    \mathbf C_S^{-1} = \beta \, \mathbf \Phi_S^\perp (\mathbf \Phi_S^\perp)^\top + \mathbf K^{\!+} + O(\beta^{-1}), \quad \text{with} \quad \mathbf K =  \mathbf \Phi_S \mathbf A_S^{-1} \mathbf \Phi_S^\top,
+\end{equation}
+where 
+\[
+\mathbf K^{\!+} = \mathbf \Phi_S \mathbf G^{-1} \mathbf A_S \mathbf G^{-1} \mathbf \Phi_S^\top,
+\quad \text{with} \quad \mathbf G = \mathbf \Phi_S^\top \mathbf \Phi_S.
+% \quad \mathbf \Phi_S (\mathbf \Phi_S)^\top + \mathbf \Phi_S^\perp (\mathbf \Phi_S^\perp)^\top = \mathbf I,
+\]
+We can test the expansion \eqref{eq:Cinv_expansion} is correct by multiplying \eqref{eq:Cinv_expansion} by \eqref{eq:CS} and then using $\mathbf \Phi_S^\perp (\mathbf \Phi_S^\perp)^\top + \mathbf \Phi_S (\mathbf \Phi_S)^\top = \mathbf I$.
+
+For a new candidate $\phi_m$ with $m \notin S$ we set $\mathbf C_{-m} = \mathbf C_S$, and substituting \eqref{eq:Cinv_expansion} into the definitions \eqref{eq:sq} gives
+\begin{equation} \label{eq:sq_low_noise}
+    s_m = \beta \, \|\vec \phi_m^\perp\|^2 + \vec \phi_m^\top \mathbf K^{\!+} \vec \phi_m  +  O(\beta^{-1}),
+    \qquad
+    q_m = \beta \, (\vec \phi_m^\perp)^\top \mathbf y^\perp + \vec \phi_m^\top \mathbf K^{\!+} \vec y  +  O(\beta^{-1}),
+\end{equation}
+where
+\[
+\vec \phi_m^\perp := \mathbf \Phi_S^\perp (\mathbf \Phi_S^\perp)^\top \vec \phi_m 
+\quad \text{and} \quad 
+\mathbf y^\perp := \mathbf \Phi_S^\perp (\mathbf \Phi_S^\perp)^\top \mathbf y,
+\]
+where we used that $(\vec \phi_m^\perp)^\top \mathbf y = (\vec \phi_m^\perp)^\top \mathbf y^\perp$. The term $\vec \phi_m^\perp$ is the \emph{novel component} of the candidate and $\mathbf y^\perp$ is the \emph{residual} -- the part of the data the basis $\mathbf \Phi_S$ cannot produce. 
+
+\subsubsection*{Novel component}
+For a novel component $\|\vec \phi_m^\perp\| > 0$ the leading order term has a simple interpretation: the sparsity $s_m$ measures how much of $\phi_m$ is genuinely new, while the quality $q_m$ measures how strongly that new part correlates with the unexplained data. The admission test $q_m^2 > s_m$ of \eqref{eq:alpha_opt_general} becomes, at leading order,
+\begin{equation} \label{eq:test_low_noise}
+    \big( \hat{\vec \phi}_m^{\perp \top} \mathbf y \big)^2 > \beta^{-1},
+    \qquad
+    \hat{\vec \phi}_m^\perp := \vec \phi_m^\perp / \|\vec \phi_m^\perp\|:
+\end{equation}
+project the data onto the unit vector along the candidate's novel direction, and admit the candidate only if that component exceeds one noise standard deviation $\beta^{-1/2}$. In this limit ARD is a matching pursuit on residuals with a noise-scaled admission threshold. When the test is passed, the optimal precision \eqref{eq:alpha_opt_general} simplifies to
+\begin{equation} \label{eq:alpha_low_noise}
+    \alpha_m^{-1} = \frac{q_m^2 - s_m}{s_m^2} \to \left( \frac{(\vec \phi_m^\perp)^\top \mathbf y}{\|\vec \phi_m^\perp\|^2} \right)^{\!2},
+\end{equation}
+and the ratio on the right is the same as the least-squares coefficient obtained by fitting the residual with the single regressor $\vec \phi_m^\perp$. ARD grants each admitted function a prior variance equal to the square of the coefficient it is about to take --- just enough room to hold it, and no more.
+
+\subsubsection*{A basis in the span} \label{sec:in_span}
+
+When a new candidate $\phi_m$ is in $\mathrm{span}(\mathbf \Phi_S)$ then $\vec \phi_m^\perp = \mathbf 0$ and the leading order terms in \eqref{eq:sq_low_noise} are zero, and so we must use the next order terms to check $q_m^2 > s_m$. In the next order the orthogonal projection $\vec y^\perp$ is ignored (because $\mathbf K^{\!+} \vec y^\perp = \vec 0$), so it helps to use the representation 
+\begin{equation}
+    \vec y = \mathbf \Phi_S \mathbf c + \mathbf y_\perp \quad \text{and} \quad 
+    \vec \phi_m = \mathbf \Phi_S \vec b.
+\end{equation}
+Using this representation, we assume all previously retained functions had their $\alpha_j$ set by ARD from \eqref{eq:alpha_low_noise} given by $\alpha_j^{-1} = c_j^2$ which is calculated by using  
+\[
+(\vec \phi_j^\perp)^\top \vec y = (\vec \phi_j^\perp)^\top \mathbf \Phi_S \mathbf c = \|\vec \phi_j^\perp\|^2 c_j,
+\]
+where just for the equation above in this section we have that $\vec \phi_j^\perp := \mathbf \Phi_{S\setminus j}^\perp (\mathbf \Phi_{S\setminus j}^\perp)^\top \vec \phi_j$ for all $j \in S$. With these $\alpha_j$ the posterior mean is $\vec \mu_S = (\mathbf \Phi_S^\top \mathbf \Phi_S + \beta^{-1} \mathbf A_S)^{-1} \mathbf \Phi_S^\top \mathbf \Phi_S \, \mathbf c = \mathbf c + O(\beta^{-1})$, the correct coefficients up to a shrinkage of order $\beta^{-1}$. 
+
+
+Substituting the above into \eqref{eq:sq_low_noise} gives the next order terms
+\begin{equation} 
+    q_m = \vec b^\top \mathbf \Phi_S^\top \mathbf K^+ \mathbf y = \vec b^\top \mathbf A_S \mathbf c,
+    \qquad
+    s_m = \vec b^\top \mathbf \Phi_S^\top \mathbf K^+ \mathbf \Phi_S \vec b = \vec b^\top \mathbf A_S \vec b,
+\end{equation}
+and the admission test $q_m^2 > s_m$ becomes
+\begin{equation} \label{eq:sq_in_span}
+    (\vec b^\top \mathbf A_S \mathbf c)^2 > \vec b^\top \mathbf A_S \vec b.
+\end{equation}
+Now we substitute $\alpha_j = c_j^{-2}$ into $\mathbf A_S$ and open up both sides into a sum to reach
+\begin{equation} \label{eq:span_test_sum}
+    \Big( \sum_{j \in S} u_j \Big)^{\!2} > \sum_{j \in S} u_j^2,
+    \text{with} \qquad  u_j := \frac{b_j}{c_j},
+\end{equation}
+where $\vec \phi_m = \sum_{j \in S} u_j \, ( c_j \vec \phi_j )$, so that $u_j$ is the fraction of the retained contribution $c_j \vec \phi_j$ that the candidate carries, and $\vec u \propto \mathbf 1$ precisely when $\vec \phi_m \parallel \mathbf y$. Both sides are quadratic in $\vec u$, so only its direction matters: writing $\theta$ for the angle between $\vec u$ and $\mathbf 1$, so that $(\cos \theta)^2 = (\sum_j u_j)^2 / (k \sum_j u_j^2)$, and the test \eqref{eq:span_test_sum} becomes $k \cos^2 \theta > 1$. Equivalently, define the \emph{effective number of retained functions the candidate merges},
+\begin{equation} \label{eq:keff}
+    k_m^{\mathrm{eff}} := \frac{q_m^2}{s_m}
+    = \frac{\big( \sum_{j} u_j \big)^2}{\sum_j u_j^2} \leq k,
+\end{equation}
+by Cauchy--Schwarz, with equality when every $u_j$ is equal. The admission test is then simply
+$k_m^{\mathrm{eff}} > 1$: a candidate already in the span earns its place only by compressing more
+than one function's worth. Its precision \eqref{eq:alpha_opt_general} and evidence gain
+\eqref{eq:ell_max} follow at once,
+\begin{equation} \label{eq:span_gain}
+    \alpha_m^{-1} = \frac{k_m^{\mathrm{eff}} - 1}{s_m},
+    \qquad
+    \ell_m^\star = \frac{1}{2} \left[ k_m^{\mathrm{eff}} - 1 - \log k_m^{\mathrm{eff}} \right],
+\end{equation}
+independent of the inner products among the retained functions and of the normalisation of
+$\vec \phi_m$. Note this requires $c_j \neq 0$ for every $j \in S$; a candidate with $b_j \neq 0$
+where $c_j = 0$ has $s_m \to \infty$ and is rejected outright.
+
+
+\paragraph{Shedding the originals.} If the retained set now has $k+1$ members while still spanning only $k$ dimensions, and since $\mathbf y = \|\mathbf y\| \vec \phi_d$, every one of the original $\phi_j$ can be deleted without making $\mathbf y$ unreachable. By \eqref{eq:evidence_support} the evidence at leading order counts the dimensions spanned, so each deletion that lowers the rank is worth $\tfrac{1}{2} \log \beta$, and reducing the retained set from $S^\star$ to $\{d\}$ lowers the rank from $k$ to $1$:
+\begin{equation} \label{eq:shed_gain}
+    \log p(\mathbf y \,|\, \{d\}) - \log p(\mathbf y \,|\, S^\star) = \frac{k-1}{2} \log \beta + O(1).
+\end{equation}
+The greedy sweep therefore has a strictly uphill path from the fat interpolating model to the sparse one --- a single $O(1)$ add, followed by deletions worth $\tfrac{1}{2} \log \beta$ apiece --- and once the originals are gone the decoy relaxes to $\alpha_d^{-1} = \|\mathbf y\|^2$, its own coefficient squared.
+
+\paragraph{Why this is not a guarantee.} The evidence always prefers the smaller basis, but Algorithm~\ref{alg:seq_ard} is coordinate ascent: it reaches that basis only when a chain of \emph{individually} uphill single moves leads there. The decoy above is reachable because one function alone replaces all $k$ originals. If instead the sparser description needs two new functions to displace three retained ones, and neither new function passes \eqref{eq:sq_in_span} on its own, the sweep stalls at a local maximum and the shorter description is never found. The per-candidate test sees one swap at a time, and the evidence landscape it climbs is not concave \autocite{wipf2008new}.
+
+\printbibliography
+\end{document}

@@ -235,4 +235,121 @@ end
         @test 0.1 < vsol.misfit_ratio < 5.0
     end
 
+    # ==========================================================================
+    # The two ways an uncertain boundary can enter, kept separate by the flags:
+    #   boundary_ridge_flag  — Σ_x acts only through the ridge Γ of eq. (Gamma_x),
+    #                          the closed-form evidence bound (q(δx) frozen at the prior);
+    #   update_geometry_flag — additionally run E-step II and learn δx.
+    # Switching the ridge off must reproduce the deterministic-boundary answer exactly,
+    # and switching it on must temper the coefficients.
+    # ==========================================================================
+    @testset "the boundary ridge is separable from E-step II" begin
+        Random.seed!(107)
+        σx = 0.05
+        g = [p[1] + σ_noise * randn() for p in x_true_circle]
+
+        function solve_flags(; ridge, geometry, points)
+            medium = LaplaceMedium{2, Float64}()
+            bd = BoundaryData(DirichletType();
+                boundary_points = points,
+                fields = [MvNormal([gi], σ_noise^2 * I(1)) for gi in g],
+                normals = normals,
+                interior_points = [[0.0, 0.0]]
+            )
+            solver = VariationalBayesianSolver(
+                prior_variance = 10.0^2,
+                boundary_ridge_flag = ridge,
+                update_geometry_flag = geometry,
+                ard_prune_flag = false,
+                max_iters = 60,
+                elbo_tol = 1e-11
+            )
+            return solve(Simulation(medium, bd; solver = solver, source_positions = sources))
+        end
+
+        uncertain = MvNormal(vcat(Vector.(x_true_circle)...), σx^2 * I(2n_bd))
+
+        v_det   = solve_flags(ridge = true,  geometry = false, points = x_true_circle)
+        v_off   = solve_flags(ridge = false, geometry = false, points = uncertain)
+        v_ridge = solve_flags(ridge = true,  geometry = false, points = uncertain)
+        v_full  = solve_flags(ridge = true,  geometry = true,  points = uncertain)
+
+        # a covariance the solver is told to ignore leaves the answer untouched
+        @test v_off.fsol.coefficients ≈ v_det.fsol.coefficients
+
+        # the ridge is a precision, so it can only shrink the coefficients
+        @test norm(v_ridge.fsol.coefficients) < norm(v_det.fsol.coefficients)
+
+        # the ridge alone never moves the boundary; E-step II does
+        @test mean_points(v_ridge.boundary_shape) == x_true_circle
+        @test mean_points(v_full.boundary_shape) != x_true_circle
+        @test geometry_elbo_is_monotone(v_ridge)
+    end
+
+    # ==========================================================================
+    # Acoustics: the same machinery on a COMPLEX-valued problem. The real working
+    # model stacks [Re; Im], so a sensor owns two rows per field component instead
+    # of one contiguous block, and both the Γ factor eq. (Gamma) and E-step II have
+    # to group rows by sensor rather than by row arithmetic. The field of a nearby
+    # incident point source varies fast enough across the boundary for radial
+    # sensor shifts to be visible in the pressure.
+    # ==========================================================================
+    @testset "acoustic (complex) boundary uncertainty" begin
+        Random.seed!(106)
+        medium = Acoustic(2; ω = 2π, ρ = 1.0, c = 1.0)
+
+        n_a = 60
+        θa = LinRange(0, 2π, n_a + 1)[1:n_a]
+        x_true_a = [SVector(cos(θ), sin(θ)) for θ in θa]
+        normals_a = [SVector(cos(θ), sin(θ)) for θ in θa]
+        sources_a = [SVector(0.6cos(θ), 0.6sin(θ)) for θ in LinRange(0, 2π, 25)[1:24]]
+
+        inc = PointSource([SVector(2.5, 0.4)], [one(ComplexF64)])
+        σ_a = 1e-3
+        g_a = [field(TractionType(), medium, inc, p, SVector(1.0, 0.0))[1] +
+               σ_a * (randn() + im * randn()) for p in x_true_a]
+
+        # nominal sensors shifted radially by ±σx: the rough perturbation that the
+        # smooth fundamental-solution field cannot absorb
+        σx = 0.02
+        x_nom_a = [x_true_a[i] + (isodd(i) ? σx : -σx) * normals_a[i] for i in 1:n_a]
+
+        bd_a = BoundaryData(TractionType();
+            boundary_points = MvNormal(vcat(Vector.(x_nom_a)...), σx^2 * I(2n_a)),
+            fields = [MvNormal([real(g), imag(g)], σ_a^2 * I(2)) for g in g_a],
+            normals = normals_a,
+            interior_points = [SVector(0.0, 0.0)]
+        )
+        solver_a = VariationalBayesianSolver(
+            prior_variance = 10.0^2,
+            update_geometry_flag = true,
+            ard_prune_flag = false,
+            max_iters = 60,
+            elbo_tol = 1e-11
+        )
+        vsol_a = solve(Simulation(medium, bd_a; solver = solver_a, source_positions = sources_a))
+        x_est_a = mean_points(vsol_a.boundary_shape)
+
+        radial_error_a(xs) = norm([dot(xs[i] - x_true_a[i], normals_a[i]) for i in 1:n_a])
+
+        @test radial_error_a(x_est_a) < 0.7 * radial_error_a(x_nom_a)
+        @test mean(sqrt.(diag(cov(vsol_a.boundary_shape.boundary_points)))) < σx
+        @test geometry_elbo_is_monotone(vsol_a)
+        @test 0.1 < vsol_a.misfit_ratio < 5.0
+
+        # the Γ rows must also survive Phase 1 selection and the position M-step, both
+        # of which rebuild the augmented design one source at a time
+        solver_ard = VariationalBayesianSolver(
+            update_geometry_flag = true,
+            optimise_source_positions_flag = true,
+            ard_threshold = 1e6,
+            max_iters = 30,
+            elbo_tol = 1e-10
+        )
+        vard = solve(Simulation(medium, bd_a; solver = solver_ard, source_positions = sources_a))
+
+        @test length(vard.fsol.positions) <= length(sources_a)
+        @test 0.1 < vard.misfit_ratio < 5.0
+    end
+
 end

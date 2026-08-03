@@ -6,56 +6,6 @@ Abstract type for different solution methods for the Method of Fundamental Solut
 abstract type AbstractSolver end
 
 """
-    SolverOptions
-
-Options shared by the solvers that can optimise the source positions
-([`BayesianSolver`](@ref) and [`VariationalBayesianSolver`](@ref)), stored in their
-`options` field. Each solver's keyword constructor accepts these as keywords directly.
-
-# Fields
-- `optimise_source_positions_flag::Bool`: optimise the source positions χ.
-- `use_greens_gradient_analytical_flag::Bool`: use the analytic `greens_gradient` where
-  available; otherwise finite differences are used (used by [`BayesianSolver`](@ref); the
-  [`VariationalBayesianSolver`](@ref) always uses finite differences on single-source columns).
-- `update_geometry_flag::Bool`: update the boundary factor and re-center the boundary
-  (used by [`VariationalBayesianSolver`](@ref)).
-- `learn_prior_flag::Bool`: learn the prior (used by [`VariationalBayesianSolver`](@ref)).
-- `max_iters::Int`: maximum number of iterations of the solver's outer loop, each of which
-  updates the whole model.
-- `max_select_iters::Int`: maximum number of actions of the source-selection phase of the
-  [`VariationalBayesianSolver`](@ref), which adds, re-estimates or deletes ONE coefficient
-  per action and so needs a budget of a different order from `max_iters`. Negative (the
-  default) means automatic: four times the number of candidate coefficients. Selection stops
-  by itself as soon as no action increases the evidence, so this is only a safety net.
-- `source_position_iters::Int`: inner iterations per source-position optimisation step.
-"""
-struct SolverOptions
-    optimise_source_positions_flag::Bool
-    use_greens_gradient_analytical_flag::Bool
-    update_geometry_flag::Bool
-    learn_prior_flag::Bool
-    max_iters::Int
-    max_select_iters::Int
-    source_position_iters::Int
-end
-
-function SolverOptions(;
-        optimise_source_positions_flag::Bool = false,
-        use_greens_gradient_analytical_flag::Bool = true,
-        update_geometry_flag::Bool = false,
-        learn_prior_flag::Bool = true,
-        max_iters::Int = 50,
-        max_select_iters::Int = -1,
-        source_position_iters::Int = 5
-    )
-    return SolverOptions(
-        optimise_source_positions_flag, use_greens_gradient_analytical_flag,
-        update_geometry_flag, learn_prior_flag, max_iters, max_select_iters,
-        source_position_iters
-    )
-end
-
-"""
     ParticularSolution
 
 A type used to specify the type of particular solution to add to the boundary data.
@@ -216,8 +166,10 @@ function system_matrix_gradient(
     N = n_sensors * d_m_out
     K = n_sources * d_m_in
 
-    # 3. Preallocate the flattened (N, K, Dim) array using the statically known NumType
-    grad_M = zeros(NumType, N, K, Dim)
+    # 3. Preallocate the flattened (N, K, Dim) array. The element type follows the kernel as
+    #    well as the geometry: complex physics (e.g. acoustics) has a complex gradient even
+    #    though the points and sources are real.
+    grad_M = zeros(promote_type(NumType, eltype(G_sample)), N, K, Dim)
     
     # --- MATRIX ASSEMBLY ---
     for j in 1:n_sources
@@ -322,17 +274,8 @@ function source_positions(cloud::Union{BoundaryShape, BoundaryData}; relative_so
 
     points = mean_points(cloud)
     normals = mean_normals(cloud)
-    len = points |> length
 
-    # Note this could be calculated at the same time as the outward normals. But that would make the code quite ugly!
-    # Sample just a few number of points to approximate the distance between neighbours
-    sampled_rng = LinRange(1,len, min(6,len)) .|> round .|> Int
-    neighbors_dists = map(points[sampled_rng]) do p
-        dists = [norm(p - q) for q in points]
-        idx = sortperm(dists)[2:min(3, len)]
-        mean(dists[idx])
-    end
-    source_distance = mean(neighbors_dists) * relative_source_distance
+    source_distance = _boundary_spacing(points) * relative_source_distance
 
     positions = map(eachindex(points)) do i
         points[i] + normals[i] .* source_distance
@@ -365,4 +308,32 @@ function source_positions(bds::Tuple{Vararg{Union{BoundaryShape, BoundaryData}}}
     )
 
     return source_positions(combined; relative_source_distance = relative_source_distance)
+end
+
+"""
+    grid_source_positions(bd::BoundaryData; n = 15, scale = 2.0, clearance = 1.0)
+
+Candidate MFS source positions "everywhere": a regular `n × n` grid covering the bounding
+box of the boundary enlarged by `scale`, keeping only points outside the domain and further
+than `clearance` times the average boundary spacing from the boundary. Intended as an
+overcomplete set of candidates for a [`VariationalBayesianSolver`](@ref), which selects the
+useful sources one at a time. See also [`source_positions`](@ref), which instead places one
+source behind every boundary point.
+"""
+function grid_source_positions(bd::BoundaryData{F, 2}; n::Int = 15, scale::Real = 2.0, clearance::Real = 1.0) where F
+    pts = mean_points(bd)
+
+    xs = [p[1] for p in pts]; ys = [p[2] for p in pts]
+    centre = SVector((minimum(xs) + maximum(xs)) / 2, (minimum(ys) + maximum(ys)) / 2)
+    halfwidth = SVector(maximum(xs) - minimum(xs), maximum(ys) - minimum(ys)) ./ 2
+
+    spacing = _boundary_spacing(pts)
+
+    grid = [
+        centre + SVector(2u - 1, 2v - 1) .* (scale .* halfwidth)
+    for u in LinRange(0, 1, n), v in LinRange(0, 1, n)]
+
+    return filter(vec(grid)) do p
+        p ∉ bd && minimum(norm(p - q) for q in pts) > clearance * spacing
+    end
 end

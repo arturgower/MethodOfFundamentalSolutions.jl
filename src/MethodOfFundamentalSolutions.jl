@@ -7,7 +7,6 @@ using StaticArrays: SVector, SMatrix
 using MultipleScattering
 using SpecialFunctions: hankelh1,besselj
 using Distributions
-using Optim
 
 
 import MultipleScattering: PhysicalMedium, ScalarMedium, spatial_dimension, field_dimension, Shape, Box, bounding_box, points_in_shape, cartesian_to_radial_coordinates, radial_to_cartesian_transform, cartesian_to_radial_transform, field
@@ -27,15 +26,9 @@ export interior_points_along_coordinate
 include("utils.jl")
 
 export Simulation, ParticularSolution, TikhonovSolver, NoParticularSolution # types
-export greens, source_positions, greens_gradient
+export greens, source_positions, grid_source_positions, greens_gradient
 export solve, system_matrix, system_matrix_gradient
 include("solve.jl")
-
-# bayesian.jl defines `BayesianSolver <: AbstractSolver` and methods on `Simulation`, so it
-# must be included after solve.jl, which defines `AbstractSolver`, `SolverOptions` and `Simulation`.
-export log_marginal_likelihood, optimise_hyperparameters, compute_coefficient_posterior, reconstruct_full_field, construct_prior, geometric_covariance # Bayesian functions
-export ProbabilityDistribution, GaussianDistribution, BayesianSolver # Prior types
-include("bayesian.jl")
 
 export FieldResult, FundamentalSolution
 export field, field_covariance, field_std, predict_field # types
@@ -44,7 +37,7 @@ include("results.jl")
 export TransmissionSimulation, PointSource # transmission (penetrable-scatterer) problems
 include("transmission.jl")
 
-export VariationalBayesianSolver, VariationalSolution, grid_source_positions
+export VariationalBayesianSolver, VariationalSolution
 include("variational.jl")
 
 export DisplacementType ,TractionType, Elastostatic, Acoustic, LaplaceMedium, DirichletType, NeumannType, laplace_M, laplace_grad_M # types and functions

@@ -3,37 +3,35 @@
 # Implements the two-phase algorithm of docs/theory/main-variational-evidence.tex:
 #
 #   Phase 1 (select) — section "Phase 1: pruning a dense set of candidate sources": sparse
-#   Bayesian learning at fixed source positions, run constructively as the fast marginal
-#   likelihood algorithm of Tipping & Faul: starting from no sources, the single best
-#   action — add a column at its exact optimal precision eq. (alpha_star), re-estimate an
-#   active precision, or delete a column — is applied until no action increases the
-#   evidence. Optionally, each newly added source's position is refined by a few
-#   hard-coded gradient-descent steps.
+#   Bayesian learning at FIXED source positions, run constructively as the fast marginal
+#   likelihood algorithm of Tipping & Faul. Starting from no sources, the single best action —
+#   add a column at its exact optimal precision eq. (alpha_star), re-estimate an active
+#   precision, or delete a column — is applied until no action increases the evidence.
 #
 #   Phase 2 (move) — Algorithm 1: variational EM on the survivors, learning the prior
 #   precisions {αᵢ} by the EM update eq. (alpha_update) (with the MacKay acceleration),
-#   optionally the source positions χ, and optionally the boundary perturbation δx.
+#   optionally the source positions χ by gradient descent, and optionally the boundary
+#   perturbation δx.
 #
 # The priors of the coefficients a and of the boundary points x are diagonal:
 #   p(a)  = ∏ᵢ N(aᵢ | 0, 1/αᵢ)          (ARD prior)
 #   p(δx) = N(0, Σ_x),  Σ_x diagonal     (taken from the covariance of the boundary points)
 # The measurement noise Σ = diag(σ²) is known and fixed throughout.
 #
-# Complex-valued problems (e.g. acoustics) are handled by stacking real and imaginary
-# parts: g̃ = [Re g; Im g], M̃ = [Re M  -Im M; Im M  Re M], ã = [Re a; Im a], so that the
-# whole algorithm runs on a real linear-Gaussian model.
+# Complex-valued problems (e.g. acoustics) are handled by stacking real and imaginary parts:
+# g̃ = [Re g; Im g], M̃ = [Re M  -Im M; Im M  Re M], ã = [Re a; Im a], so that the whole
+# algorithm runs on a real linear-Gaussian model — the `WorkingModel` below.
 #
-# Everything is phrased on the whitened augmented model Φ = [W M̄; V], ĝ = [W g; 0], where
-# W is a left square root of the noise precision (Σ⁻¹ = WᵀW) and Γ = VᵀV is the extra
-# coefficient precision from the boundary uncertainty, eq. (Gamma): then the coefficient
-# posterior, the expected misfit and the per-column evidence factors are all plain
-# least-squares expressions in Φ and ĝ. Since the basis is typically overcomplete, every
-# posterior over the retained basis is evaluated in the data-sized Woodbury form of
-# eqs. (posterior_mean_woodbury)-(posterior_covariance_woodbury): the K × K precision
-# ΦᵀΦ + diag α is never formed, and the only Cholesky is of a P × P matrix, P being the
-# number of rows of Φ. Phase 1 goes the other way round — its active set is far smaller
-# than P — and works with the k × k precision of the active columns alone; see
-# `_add_sources!`.
+# Everything is phrased on the whitened augmented design Φ = [W M̄; V], with data ĝ = [W g; 0],
+# where W is a left square root of the noise precision (Σ⁻¹ = WᵀW) and Γ = VᵀV is the extra
+# coefficient precision from the boundary uncertainty, eq. (Gamma): the coefficient posterior,
+# the expected misfit and the per-column evidence factors are then plain least-squares
+# expressions in Φ and ĝ. Since the basis is typically overcomplete, Phase 2 evaluates every
+# posterior in the data-sized Woodbury form of eqs. (posterior_mean_woodbury)-
+# (posterior_covariance_woodbury): the K × K precision ΦᵀΦ + diag α is never formed, and the
+# only Cholesky is of a P × P matrix, P being the number of rows of Φ. Phase 1 goes the other
+# way round — its active set is far smaller than P — and works with the k × k precision of the
+# active columns alone; see `_select_columns`.
 
 """
     VariationalBayesianSolver <: AbstractSolver
@@ -53,24 +51,37 @@ the boundary `fields` as a vector of `MvNormal` (one per boundary point) or as a
 complex-valued problems each point must be a `2FD`-dimensional `MvNormal` over the stacked
 real and imaginary parts `[Re; Im]` of its `FD` field components.
 
-The options shared with [`BayesianSolver`](@ref) live in the field `options::SolverOptions`
-(see [`SolverOptions`](@ref)); the keyword constructor accepts them as keywords directly.
-
 # Keyword arguments
-- `ard_prune_flag = true`: select the sources sparsely. With `learn_prior_flag` this runs
-  the one-source-at-a-time selection of Phase 1, and afterwards keeps pruning any source
-  whose precisions all exceed `ard_threshold` during Phase 2. When `false` every given
-  source is kept.
+- `select_sources_flag = ard_prune_flag`: run the Phase 1 selection, which starts from an
+  empty basis and adds one candidate coefficient at a time by the exact evidence criterion.
+  Set to `false` (with `ard_prune_flag` left on) to enter Algorithm 1 directly on a set of
+  sources that Phase 1 has already chosen — the two-stage form of the theory, where Phase 2
+  is `Require`d to start from the survivors of Phase 1 and their precisions (pass those back
+  as `prior_variance = 1 ./ vsol.prior_precisions`).
+- `ard_prune_flag = true`: delete any source whose precisions all exceed `ard_threshold`
+  during Phase 2 (Algorithm 1, line 8), and, unless `select_sources_flag` says otherwise,
+  run the Phase 1 selection first. When `false` every given source is kept.
 - `learn_prior_flag = true`: learn the prior precisions (Phase 1 exactly, then the EM
   update `αᵢ = 1/(μᵢ² + Σᵢᵢ)` in Phase 2). When `false` the precisions stay at their
   initial values, and Phase 1 is skipped.
-- `optimise_source_positions_flag = false`: optimise the source positions by hard-coded
-  gradient descent with backtracking on the expected misfit — `source_position_iters`
-  steps for each newly added source in Phase 1, and per source per iteration in Phase 2.
+- `optimise_source_positions_flag = false`: optimise the source positions in Phase 2 by
+  gradient descent with backtracking on the expected misfit, `source_position_iters` steps
+  per source per iteration. The positions are fixed throughout Phase 1, as the theory
+  prescribes: all its guarantees hold only for a fixed basis.
 - `source_position_iters = 5`: gradient-descent steps per source-position update.
-- `update_geometry_flag = false`: update the boundary factor `q(δx)` and re-center the
-  boundary (E-step II). Requires the `boundary_points` to be an `MvNormal`; its diagonal
-  covariance is the prior `Σ_x`. Not implemented for complex-valued problems.
+- `boundary_ridge_flag = true`: when the `boundary_points` carry a covariance `Σ_x`, add
+  the ridge `Γ` of eq. (Gamma_x) to the coefficient precision — the closed-form evidence
+  bound of the section "A closed-form evidence bound: boundary variance as pseudo-data".
+  It tempers the coefficients in the directions in which the boundary trace is most
+  sensitive to where the sensors actually are, without inferring the boundary. This is what
+  Phase 1 always uses; with `update_geometry_flag = false` it is also all that Phase 2 uses,
+  which is the regime to pick when the sensor positions are uncertain but not identifiable
+  from the data. Set to `false` to ignore `Σ_x` entirely. Requires independent (diagonal)
+  sensor noise.
+- `update_geometry_flag = false`: additionally update the boundary factor `q(δx)` and
+  re-center the boundary (E-step II), i.e. learn the boundary rather than only allow for
+  it. Requires the `boundary_points` to be an `MvNormal` (or a vector of them, one per
+  point), whose diagonal covariance is `Σ_x`.
 - `priors`, `prior`, `prior_variance = 1.0`: the initial prior variances `1/αᵢ` of the
   coefficients, used only when Phase 1 is skipped (Phase 1 sets each precision by its
   exact evidence maximizer). A vector of `MvNormal` (one per source), a single `MvNormal`,
@@ -91,28 +102,37 @@ The options shared with [`BayesianSolver`](@ref) live in the field `options::Sol
   whereas an under-sized one silently truncates the selection.
 """
 struct VariationalBayesianSolver <: AbstractSolver
-    options::SolverOptions
     prior_variance::Vector{Float64}
+    select_sources_flag::Bool
     ard_prune_flag::Bool
     ard_threshold::Float64
+    learn_prior_flag::Bool
     mackay_acceleration_flag::Bool
+    optimise_source_positions_flag::Bool
+    source_position_iters::Int
+    boundary_ridge_flag::Bool
+    update_geometry_flag::Bool
     elbo_tol::Float64
+    max_iters::Int
+    max_select_iters::Int
 end
 
 function VariationalBayesianSolver(;
         priors::AbstractVector{<:AbstractMvNormal} = MvNormal[],
         prior::Union{Nothing, ContinuousMultivariateDistribution} = nothing,
         prior_variance::Union{Real, AbstractVector{<:Real}} = 1.0,
-        optimise_source_positions_flag::Bool = false,
-        update_geometry_flag::Bool = false,
-        learn_prior_flag::Bool = true,
         ard_prune_flag::Bool = true,
+        select_sources_flag::Bool = ard_prune_flag,
         ard_threshold::Real = 1e8,
+        learn_prior_flag::Bool = true,
         mackay_acceleration_flag::Bool = true,
+        optimise_source_positions_flag::Bool = false,
+        source_position_iters::Int = 5,
+        boundary_ridge_flag::Bool = true,
+        update_geometry_flag::Bool = false,
         elbo_tol::Real = 1e-8,
         max_iters::Int = 200,
-        max_select_iters::Int = -1,
-        source_position_iters::Int = 5
+        max_select_iters::Int = -1
     )
 
     # The diagonal ARD prior is fully characterized by its variances, so the `priors`,
@@ -128,19 +148,12 @@ function VariationalBayesianSolver(;
     pvs = pv isa Real ? [Float64(pv)] : Vector{Float64}(pv)
     all(>(0), pvs) || throw(ArgumentError("all prior variances must be positive"))
 
-    options = SolverOptions(;
-        optimise_source_positions_flag = optimise_source_positions_flag,
-        update_geometry_flag = update_geometry_flag,
-        learn_prior_flag = learn_prior_flag,
-        max_iters = max_iters,
-        max_select_iters = max_select_iters,
-        source_position_iters = source_position_iters
-    )
-
     return VariationalBayesianSolver(
-        options, pvs,
-        ard_prune_flag, Float64(ard_threshold),
-        mackay_acceleration_flag, Float64(elbo_tol)
+        pvs, select_sources_flag, ard_prune_flag, Float64(ard_threshold),
+        learn_prior_flag, mackay_acceleration_flag,
+        optimise_source_positions_flag, source_position_iters,
+        boundary_ridge_flag, update_geometry_flag,
+        Float64(elbo_tol), max_iters, max_select_iters
     )
 end
 
@@ -196,52 +209,90 @@ field_covariance(ft::FieldType, vsol::VariationalSolution, x::AbstractVector, ou
 field_std(ft::FieldType, vsol::VariationalSolution, x::AbstractVector, outward_normal::AbstractVector = ones(x |> length)) =
     field_std(ft, vsol.fsol, x, outward_normal)
 
-"""
-    grid_source_positions(bd::BoundaryData; n = 15, scale = 2.0, clearance = 1.0)
-
-Candidate MFS source positions "everywhere": a regular `n × n` grid covering the bounding
-box of the boundary enlarged by `scale`, keeping only points outside the domain and further
-than `clearance` times the average boundary spacing from the boundary. Intended as an
-overcomplete set of candidates for a [`VariationalBayesianSolver`](@ref), which selects the
-useful sources one at a time.
-"""
-function grid_source_positions(bd::BoundaryData{F, 2}; n::Int = 15, scale::Real = 2.0, clearance::Real = 1.0) where F
-    pts = mean_points(bd)
-    len = length(pts)
-
-    xs = [p[1] for p in pts]; ys = [p[2] for p in pts]
-    centre = SVector((minimum(xs) + maximum(xs)) / 2, (minimum(ys) + maximum(ys)) / 2)
-    halfwidth = SVector(maximum(xs) - minimum(xs), maximum(ys) - minimum(ys)) ./ 2
-
-    spacing = _boundary_spacing(pts)
-
-    grid = [
-        centre + SVector(2u - 1, 2v - 1) .* (scale .* halfwidth)
-    for u in LinRange(0, 1, n), v in LinRange(0, 1, n)]
-
-    return filter(vec(grid)) do p
-        p ∉ bd && minimum(norm(p - q) for q in pts) > clearance * spacing
-    end
-end
-
 # ------------------------------------------------------------------------------------
-# Internal helpers. All of them operate on the real (possibly [Re; Im]-stacked) model.
+# The working model and the two Gaussian factors of the variational posterior
 # ------------------------------------------------------------------------------------
 
 # precisions are capped here rather than at Inf, so that a switched-off coefficient still
 # has a well-defined (tiny) prior variance in Phase 2
 const ALPHA_CAP = 1e12
 
-# Average spacing between neighbouring boundary points, as in source_positions.
-function _boundary_spacing(pts)
-    len = length(pts)
-    sampled_rng = LinRange(1, len, min(6, len)) .|> round .|> Int
-    return mean(map(pts[sampled_rng]) do p
-        dists = [norm(p - q) for q in pts]
-        idx = sortperm(dists)[2:min(3, len)]
-        mean(dists[idx])
-    end)
+"""
+    WorkingModel
+
+Everything both phases share about the real (possibly `[Re; Im]`-stacked) working model: the
+physics, the data with the particular solution subtracted, and the known measurement noise.
+Only the boundary points, the source positions and `q(δx)` change during a solve, so those
+are passed around separately.
+
+# Fields
+- `medium`, `field_dim`, `iscomplex`: the physics, and how it maps onto the real model.
+- `g`: the data of the real model, i.e. the boundary fields minus the particular solution,
+  `[Re g; Im g]`-stacked for complex physics.
+- `ĝ`: the data of the whitened augmented model, `[W g; 0]` — the Γ rows carry no data.
+- `W`, `w`, `noise_logdet`: a left square root of the noise precision (Σ⁻¹ = WᵀW), the
+  precision Σ⁻¹ itself (a vector of reciprocal variances for independent sensor noise, a
+  matrix for correlated noise), and log|Σ|.
+- `row_sensor`: the boundary sensor each row of the real model belongs to. Real problems
+  stack `d_m` rows per sensor in sensor order; complex ones stack that block twice, once for
+  the real parts and once for the imaginary parts. Every quantity that groups rows by sensor
+  — the Γ factor and E-step II — goes through this map rather than through row arithmetic.
+"""
+struct WorkingModel{Dim, P <: PhysicalMedium{Dim}, WT <: AbstractMatrix, NT}
+    medium::P
+    field_dim::Int
+    iscomplex::Bool
+    g::Vector{Float64}
+    ĝ::Vector{Float64}
+    W::WT
+    w::NT
+    noise_logdet::Float64
+    row_sensor::Vector{Int}
 end
+
+"""
+    BoundaryFactor
+
+The Gaussian factor q(δx) = N(`mean`, `cov`) over the boundary perturbation, present
+whenever the boundary points carry a covariance Σ_x that is not being ignored. It is frozen
+at its prior N(0, Σ_x) unless E-step II updates it (`update_geometry_flag`), and in that
+frozen state its contribution to the bound is identically zero.
+
+`prior_mean` is the prior mean of δx *relative to the current linearization point*, i.e. the
+nominal boundary seen from the re-centered one: the prior stays anchored at the original
+nominal boundary, so directions the data cannot inform are pulled back to it instead of
+drifting with each re-linearization. `prior_var` is the diagonal of Σ_x.
+"""
+mutable struct BoundaryFactor
+    mean::Vector{Float64}
+    cov::Matrix{Float64}
+    logdet_cov::Float64
+    prior_mean::Vector{Float64}
+    prior_var::Vector{Float64}
+end
+
+BoundaryFactor(sx2::Vector{Float64}) = BoundaryFactor(
+    zeros(length(sx2)), Matrix(Diagonal(sx2)), sum(log, sx2), zeros(length(sx2)), sx2
+)
+
+# The coefficient factor q(a) = N(mean, cov), with the log-determinant of the covariance the
+# bound needs (which the Woodbury form of `_coefficient_posterior` returns for free).
+struct CoefficientPosterior
+    mean::Vector{Float64}
+    cov::Matrix{Float64}
+    logdet_cov::Float64
+end
+
+_empty_posterior() = CoefficientPosterior(Float64[], zeros(0, 0), 0.0)
+
+# The posterior restricted to the coefficients `cols`, after ARD switched off the others.
+_restrict(post::CoefficientPosterior, cols::AbstractVector{Int}) =
+    CoefficientPosterior(post.mean[cols], post.cov[cols, cols],
+        logdet(_safe_cholesky(post.cov[cols, cols])))
+
+# ------------------------------------------------------------------------------------
+# Assembling the working model from the boundary data
+# ------------------------------------------------------------------------------------
 
 # The mean data and the known measurement-noise covariance, from the boundary data alone,
 # in the ordering of the real working model: per-point stacking for real problems, and
@@ -281,59 +332,161 @@ function _data_and_noise(bd::BoundaryData, FD::Int, iscomplex::Bool)
     return g0, noise
 end
 
+# Build the working model of `sim`: subtract the particular solution, stack [Re; Im] for
+# complex physics, and whiten by the known measurement noise. `use_ridge` says whether the
+# augmented design carries the Γ rows, which the whitened data pads with zeros.
+function _working_model(sim::Simulation, use_ridge::Bool)
+    medium = sim.medium
+    bd = sim.boundary_data
+    FD = field_dimension(medium)
+    Dim = spatial_dimension(medium)
+
+    M0 = system_matrix(sim.source_positions, medium, bd)
+    iscomplex = eltype(M0) <: Complex
+
+    # A fundamental solution is singular at its own source, so a source sitting on a boundary
+    # point makes a column infinite — and the failure would otherwise surface much later, as an
+    # unreadable LAPACK error inside one of the factorizations.
+    if !all(isfinite, M0)
+        bad = findall(!isfinite, M0)
+        j = min(first(bad)[2] ÷ max(1, FD) + 1, length(sim.source_positions))
+        throw(ArgumentError(
+            "the system matrix is not finite in $(length(bad)) of its entries: source " *
+            "$j at $(sim.source_positions[j]) lies on (or unusably close to) a boundary " *
+            "point. Keep every source clear of the boundary."
+        ))
+    end
+
+    g0, noise = _data_and_noise(bd, FD, iscomplex)
+    g0 = g0 - vcat(field(medium, bd, sim.particular_solution)...)
+    g = iscomplex ? Vector{Float64}(vcat(real.(g0), imag.(g0))) : Vector{Float64}(g0)
+
+    # measurement-noise precision w (= Σ⁻¹) and log|Σ|, from either a diagonal (vector of
+    # variances) or a full (matrix) noise covariance
+    w, noise_logdet = if noise isa AbstractVector
+        all(>(0), noise) || throw(ArgumentError("all measurement noise variances must be positive"))
+        (1 ./ noise, sum(log, noise))
+    else
+        Cf = cholesky(Symmetric(Matrix(noise)))
+        (Matrix(Symmetric(inv(Cf))), logdet(Cf))
+    end
+    W = _whitener(w)
+    ĝ = use_ridge ? vcat(W * g, zeros(length(g) * Dim)) : W * g
+
+    n_sensors = length(mean_points(bd))
+    d_m = size(M0, 1) ÷ n_sensors
+    row_sensor = repeat(repeat(1:n_sensors, inner = d_m), iscomplex ? 2 : 1)
+
+    return WorkingModel{Dim, typeof(medium), typeof(W), typeof(w)}(
+        medium, FD, iscomplex, g, ĝ, W, w, noise_logdet, row_sensor
+    )
+end
+
+# The diagonal Σ_x of the boundary prior, or `nothing` when the boundary is deterministic or
+# its covariance is to be ignored. Its presence is what turns the ridge Γ on.
+function _boundary_variances(sim::Simulation, solver::VariationalBayesianSolver)
+    Σx = cov(sim.boundary_data.boundary_shape.boundary_points)
+    (Σx isa UniformScaling) && return nothing
+    (solver.update_geometry_flag || solver.boundary_ridge_flag) || return nothing
+    return Vector{Float64}(diag(Σx))
+end
+
 # The model matrix of the real working model: for complex physics the real/imaginary parts
 # are stacked so that g̃ = M̃ ã with ã = [Re a; Im a].
-function _stacked_system_matrix(source_positions, medium, bd, iscomplex::Bool)
-    M0 = system_matrix(source_positions, medium, bd)
-    if iscomplex
-        Mr = real.(M0); Mi = imag.(M0)
-        return [Mr -Mi; Mi Mr]
-    else
-        return Matrix{Float64}(M0)
+function _stacked_system_matrix(model::WorkingModel, bd, src_pos)
+    M0 = system_matrix(src_pos, model.medium, bd)
+    model.iscomplex || return Matrix{Float64}(M0)
+    Mr = real.(M0); Mi = imag.(M0)
+    return [Mr -Mi; Mi Mr]
+end
+
+# ∂M̃/∂x of the same real working model, as an (Nr × K × Dim) array: the derivative of every
+# row of M̃ with respect to the position of its own boundary sensor, stacked exactly like
+# `_stacked_system_matrix` so that rows and columns keep the [Re; Im] ordering.
+function _stacked_gradient(model::WorkingModel, bd, src_pos)
+    G = system_matrix_gradient(src_pos, model.medium, bd)
+    model.iscomplex || return Array{Float64}(G)
+
+    N, K, Dim = size(G)
+    S = zeros(Float64, 2N, 2K, Dim)
+    for d in 1:Dim
+        Gr = real.(view(G, :, :, d)); Gi = imag.(view(G, :, :, d))
+        S[1:N, 1:K, d]               =  Gr
+        S[1:N, (K + 1):2K, d]        = -Gi
+        S[(N + 1):2N, 1:K, d]        =  Gi
+        S[(N + 1):2N, (K + 1):2K, d] =  Gr
     end
+    return S
 end
 
-# Column indices, in the stacked coefficient vector, of the sources `keep`.
-function _kept_columns(keep::AbstractVector{Int}, n_src::Int, FD::Int, iscomplex::Bool)
-    re = reduce(vcat, [collect(((j - 1) * FD + 1):(j * FD)) for j in keep])
-    return iscomplex ? vcat(re, re .+ n_src * FD) : re
-end
+# The factor V of the extra coefficient precision Γ = VᵀV = Σ_kl Σδx^kl M_kᵀ Σ⁻¹ M_l of
+# eq. (Gamma). Row r of M depends only on the boundary point of its own sensor, so only the
+# Dim × Dim diagonal blocks Σδx^(i) of Σδx contribute and, with the K × Dim gradient block
+# G_r of data row r and its sensor i(r), Γ = Σ_r w_r G_r Σδx^(i(r)) G_rᵀ. Factoring each
+# block as L_i L_iᵀ gives Γ = VᵀV with the Dim rows √w_r L_i(r)ᵀ G_rᵀ of V per data row r.
+# Γ is only ever needed through this factor, so it is never formed: that keeps the
+# coefficient posterior in its data-sized form, and costs O(Nr Dim² K) instead of the
+# O(Nr Dim² K²) of accumulating the K × K matrix.
+function _gamma_factor(model::WorkingModel, gradM::AbstractArray, boundary::BoundaryFactor)
+    N, K, Dim = size(gradM)
+    w, row_sensor, Σδx = model.w, model.row_sensor, boundary.cov
 
-_source_columns(j::Int, n_src::Int, FD::Int, iscomplex::Bool) = _kept_columns([j], n_src, FD, iscomplex)
-
-function _initial_precisions(pv::Vector{Float64}, K::Int, Kh::Int, iscomplex::Bool)
-    if length(pv) == 1
-        return fill(1 / pv[1], K)
-    elseif length(pv) == K
-        return 1 ./ pv
-    elseif iscomplex && length(pv) == Kh
-        return vcat(1 ./ pv, 1 ./ pv)
-    else
-        throw(ArgumentError("prior_variance must be a scalar, or have one entry per coefficient ($Kh) or per real degree of freedom ($K)"))
+    Lts = map(1:maximum(row_sensor)) do i
+        ks = ((i - 1) * Dim + 1):(i * Dim)
+        transpose(_safe_cholesky(Σδx[ks, ks]).L)
     end
+    Vγ = zeros(N * Dim, K)
+    for r in 1:N
+        Vγ[((r - 1) * Dim + 1):(r * Dim), :] =
+            sqrt(w[r]) .* (Lts[row_sensor[r]] * transpose(Matrix(gradM[r, :, :])))
+    end
+    return Vγ
 end
 
-# Cholesky of a symmetric positive definite matrix, retried with a small diagonal jitter when
-# round-off makes the factorization fail.
-function _safe_cholesky(A::AbstractMatrix)
-    S = Symmetric(Matrix(A))
-    C = cholesky(S; check = false)
-    issuccess(C) && return C
-    jitter = 1e-12 * max(1.0, maximum(abs, diag(S)))
-    return cholesky(Symmetric(S + jitter * I))
+# The pieces of the model that depend on where the boundary and the sources are: the
+# unwhitened stacked system matrix M (which E-step II and the boundary error need), its
+# gradient, and the whitened augmented design Φ = [W M; V].
+function _assemble(model::WorkingModel, bd, src_pos, boundary)
+    M = _stacked_system_matrix(model, bd, src_pos)
+    boundary === nothing && return M, nothing, model.W * M
+    gradM = _stacked_gradient(model, bd, src_pos)
+    return M, gradM, vcat(model.W * M, _gamma_factor(model, gradM, boundary))
 end
 
-# A left square root W of the measurement-noise precision, so that Σ⁻¹ = WᵀW: the whitened
-# model matrix W M is what every data-sized posterior is built from. The noise precision is
-# stored either as a vector of reciprocal variances w = 1/σ² (independent sensor noise, the
-# fast path) or as a full precision matrix w = Σ⁻¹ (correlated noise).
-_whitener(w::AbstractVector) = Diagonal(sqrt.(w))
-_whitener(w::AbstractMatrix) = Matrix(transpose(_safe_cholesky(w).L))
+# The augmented design alone, used for a single source when its position moves.
+_design(model::WorkingModel, bd, src_pos, boundary) = last(_assemble(model, bd, src_pos, boundary))
 
-# The augmented design Φ = [W M̄; V] of the whitened model: with Γ = VᵀV the extra
-# coefficient precision from the boundary uncertainty, ΦᵀΦ = M̄ᵀ Σ⁻¹ M̄ + Γ.
-_phi(Mw::AbstractMatrix, ::Nothing) = Mw
-_phi(Mw::AbstractMatrix, Vγ::AbstractMatrix) = vcat(Mw, Vγ)
+# ------------------------------------------------------------------------------------
+# Bookkeeping of the coefficient columns
+# ------------------------------------------------------------------------------------
+
+# Column indices, in the stacked coefficient vector, of the sources `keep` out of `n_src`.
+function _kept_columns(model::WorkingModel, keep::AbstractVector{Int}, n_src::Int)
+    FD = model.field_dim
+    re = reduce(vcat, [collect(((j - 1) * FD + 1):(j * FD)) for j in keep]; init = Int[])
+    return model.iscomplex ? vcat(re, re .+ n_src * FD) : re
+end
+
+_source_columns(model::WorkingModel, j::Int, n_src::Int) = _kept_columns(model, [j], n_src)
+
+# The sources with at least one coefficient still switched on, and the columns they own.
+function _active_sources(model::WorkingModel, α::AbstractVector, n_src::Int, threshold::Real)
+    keep = [j for j in 1:n_src if any(<(threshold), α[_source_columns(model, j, n_src)])]
+    return keep, _kept_columns(model, keep, n_src)
+end
+
+function _initial_precisions(pv::Vector{Float64}, model::WorkingModel, n_src::Int)
+    Kh = n_src * model.field_dim
+    K = model.iscomplex ? 2Kh : Kh
+    length(pv) == 1 && return fill(1 / pv[1], K)
+    length(pv) == K && return 1 ./ pv
+    (model.iscomplex && length(pv) == Kh) && return vcat(1 ./ pv, 1 ./ pv)
+    throw(ArgumentError("prior_variance must be a scalar, or have one entry per coefficient ($Kh) or per real degree of freedom ($K)"))
+end
+
+# ------------------------------------------------------------------------------------
+# The variational updates
+# ------------------------------------------------------------------------------------
 
 # E-step I, eq. (vb_coefficient_update), on the whitened augmented model:
 # Σ_post = (ΦᵀΦ + diag α)⁻¹ and μ_post = Σ_post Φᵀ ĝ, evaluated in the data-sized Woodbury
@@ -347,90 +500,66 @@ function _coefficient_posterior(Φ::AbstractMatrix, α::AbstractVector, ĝ::Abst
     C = _safe_cholesky(ΦA * transpose(Φ) + I)  # I + Φ A⁻¹ Φᵀ, P × P
     Σpost = Matrix(Symmetric(Diagonal(αinv) - transpose(ΦA) * (C \ ΦA)))
     logdetΣ = -logdet(C) - sum(log, α)
-    μ = Σpost * (transpose(Φ) * ĝ)
-    return μ, Σpost, logdetΣ
+    return CoefficientPosterior(Σpost * (transpose(Φ) * ĝ), Σpost, logdetΣ)
 end
 
 # The noise-weighted expected misfit R of eq. (R) on the whitened augmented model:
 # R = ‖ĝ - Φμ‖² + tr(Φ Σ_post Φᵀ). Through the rows [W M̄; V] of Φ this expands into the
 # misfit of the mean solution, the extra misfit from the coefficient uncertainty, and the
 # boundary-uncertainty terms μᵀΓμ + tr(Γ Σ_post).
-function _expected_misfit(Φ::AbstractMatrix, μ::AbstractVector, Σpost::AbstractMatrix, ĝ::AbstractVector)
-    r = ĝ - Φ * μ
-    return dot(r, r) + sum((Φ * Σpost) .* Φ)
+function _expected_misfit(Φ::AbstractMatrix, post::CoefficientPosterior, ĝ::AbstractVector)
+    r = ĝ - Φ * post.mean
+    return dot(r, r) + sum((Φ * post.cov) .* Φ)
 end
 
 # The evidence lower bound F of eq. (elbo_model), with the Gaussian KL of eq. (gaussian_kl).
-# The prior of the boundary perturbation stays anchored at the original nominal boundary:
-# relative to the current linearization point it is N(m0, Σx) with m0 = μ_x0 - x_lin.
-function _elbo(R::Real, Nr::Int, noise_logdet::Real, α::AbstractVector, μ::AbstractVector,
-        Σpost::AbstractMatrix, logdetΣ::Real;
-        μδx = nothing, Σδx = nothing,
-        logdetΣδx::Real = 0.0,
-        sx2 = nothing, m0 = nothing
-    )
-    F = -0.5 * (Nr * log(2π) + noise_logdet) - 0.5 * R
-    K = length(α)
-    F -= 0.5 * (sum(α .* (abs2.(μ) .+ diag(Σpost))) - K - sum(log.(α)) - logdetΣ)
-    if μδx !== nothing
-        nx = length(μδx)
-        F -= 0.5 * (sum(diag(Σδx) ./ sx2) + sum(abs2.(μδx .- m0) ./ sx2) - nx + sum(log.(sx2)) - logdetΣδx)
+# The boundary factor contributes its own KL, which vanishes identically while q(δx) is
+# frozen at the prior — that is, everywhere except after E-step II has moved it.
+function _elbo(model::WorkingModel, R::Real, α::AbstractVector,
+        post::CoefficientPosterior, boundary::Union{Nothing, BoundaryFactor})
+
+    F = -0.5 * (length(model.g) * log(2π) + model.noise_logdet) - 0.5 * R
+    # `init` for the empty model of the first Phase-1 action, which has no coefficients
+    F -= 0.5 * (sum(α .* (abs2.(post.mean) .+ diag(post.cov)); init = 0.0) - length(α)
+                - sum(log, α; init = 0.0) - post.logdet_cov)
+    if boundary !== nothing
+        sx2 = boundary.prior_var
+        F -= 0.5 * (sum(diag(boundary.cov) ./ sx2)
+                    + sum(abs2.(boundary.mean .- boundary.prior_mean) ./ sx2)
+                    - length(sx2) + sum(log, sx2) - boundary.logdet_cov)
     end
     return F
 end
 
-# The factor V of the extra coefficient precision Γ = VᵀV = Σ_kl Σδx^kl M_kᵀ Σ⁻¹ M_l of
-# eq. (Gamma). Row r of M depends only on the boundary point of its own sensor, so only the
-# Dim × Dim diagonal blocks Σδx^(i) of Σδx contribute and, with the K × Dim gradient block
-# G_r = [∂M_r/∂x_1 … ∂M_r/∂x_Dim] of data row r and its sensor i(r),
-#   Γ = Σ_r w_r G_r Σδx^(i(r)) G_rᵀ.
-# Each Σδx^(i) is a covariance, so factoring it as L_i L_iᵀ gives Γ = VᵀV with the Dim rows
-# √w_r L_i(r)ᵀ G_rᵀ of V per data row r. Γ is only ever needed through this factor, so it is
-# never formed: that keeps the coefficient posterior in its data-sized form, and costs
-# O(Nr Dim² K) instead of the O(Nr Dim² K²) of accumulating the K × K matrix.
-function _gamma_factor(gradM::AbstractArray, Σδx::AbstractMatrix, w::AbstractVector, d_m::Int)
-    N, K = size(gradM, 1), size(gradM, 2)
+# E-step II, eqs. (vb_boundary_precision)-(vb_boundary_update): update q(δx) in place. With a
+# diagonal prior Σ_x and independent sensors both the precision E[DᵀΣ⁻¹D] and Σ_δx are block
+# diagonal, one Dim × Dim block per sensor.
+function _update_boundary!(boundary::BoundaryFactor, model::WorkingModel,
+        M::AbstractMatrix, gradM::AbstractArray, post::CoefficientPosterior)
+
+    w, g, row_sensor = model.w, model.g, model.row_sensor
+    μ, Σpost = post.mean, post.cov
+    sx2, m0 = boundary.prior_var, boundary.prior_mean
     Dim = size(gradM, 3)
-    Vγ = zeros(N * Dim, K)
-    for i in 1:(N ÷ d_m)
-        ks = ((i - 1) * Dim + 1):(i * Dim)
-        Lt = transpose(_safe_cholesky(Σδx[ks, ks]).L)
-        for r in (((i - 1) * d_m + 1):(i * d_m))
-            Vγ[((r - 1) * Dim + 1):(r * Dim), :] = sqrt(w[r]) .* (Lt * transpose(Matrix(gradM[r, :, :])))
-        end
+
+    n_sensors = maximum(row_sensor)
+    rows_of = [Int[] for _ in 1:n_sensors]
+    for r in eachindex(row_sensor)
+        push!(rows_of[row_sensor[r]], r)
     end
-    return Vγ
-end
 
-# E-step II, eqs. (vb_boundary_precision)-(vb_boundary_update): q(δx) = N(μ_δx, Σ_δx).
-# With a diagonal prior Σ_x and independent sensors both the precision E[DᵀΣ⁻¹D] and Σ_δx
-# are block diagonal, one Dim × Dim block per sensor. The prior of δx relative to the
-# current linearization point is N(m0, Σx) with m0 = μ_x0 - x_lin, so that re-centering
-# does not move the prior: directions the data cannot inform are pulled back to the
-# nominal boundary instead of drifting with each re-linearization.
-function _boundary_posterior(M::AbstractMatrix, gradM::AbstractArray, μ::AbstractVector,
-        Σpost::AbstractMatrix, w::AbstractVector, g::AbstractVector,
-        sx2::AbstractVector, m0::AbstractVector, d_m::Int, Dim::Int
-    )
-    N = size(M, 1)
-    n_sensors = N ÷ d_m
-    nx = n_sensors * Dim
-    μδx = zeros(nx)
-    Σδx = zeros(nx, nx)
-    logdetΣδx = 0.0
     Mμ = M * μ
-
+    boundary.logdet_cov = 0.0
     for i in 1:n_sensors
         A = zeros(Dim, Dim)
-        b = zeros(Dim)
-        for r in (((i - 1) * d_m + 1):(i * d_m))
-            Mr = M[r, :]
-            ΣMr = Σpost * Mr
+        rhs = zeros(Dim)
+        for r in rows_of[i]
+            ΣMr = Σpost * M[r, :]
             vs = [Vector(gradM[r, :, d]) for d in 1:Dim]
             Σvs = [Σpost * vs[d] for d in 1:Dim]
             for d in 1:Dim
                 vμd = dot(vs[d], μ)
-                b[d] += w[r] * (vμd * (g[r] - Mμ[r]) - dot(vs[d], ΣMr))
+                rhs[d] += w[r] * (vμd * (g[r] - Mμ[r]) - dot(vs[d], ΣMr))
                 for d2 in d:Dim
                     val = w[r] * (vμd * dot(vs[d2], μ) + dot(vs[d], Σvs[d2]))
                     A[d, d2] += val
@@ -440,16 +569,16 @@ function _boundary_posterior(M::AbstractMatrix, gradM::AbstractArray, μ::Abstra
         end
         ks = ((i - 1) * Dim + 1):(i * Dim)
         Sblock = inv(Symmetric(A + Diagonal(1 ./ sx2[ks])))
-        Σδx[ks, ks] = Sblock
-        μδx[ks] = Sblock * (b + m0[ks] ./ sx2[ks])
-        logdetΣδx += logdet(Symmetric(Matrix(Sblock)))
+        boundary.cov[ks, ks] = Sblock
+        boundary.mean[ks] = Sblock * (rhs + m0[ks] ./ sx2[ks])
+        boundary.logdet_cov += logdet(Symmetric(Matrix(Sblock)))
     end
-    return μδx, Σδx, logdetΣδx
+    return boundary
 end
 
 # Re-center the boundary at the current estimate: μ_x ← μ_x + μ_δx (Algorithm 1, line 6).
 # The outward normals are kept fixed, consistent with small perturbations.
-function _recenter_boundary(bd::BoundaryData, μδx::AbstractVector, Dim::Int)
+function _recenter_boundary(bd::BoundaryData{F, Dim}, μδx::AbstractVector) where {F, Dim}
     pts = mean_points(bd)
     newpts = [
         pts[i] + SVector{Dim, Float64}(ntuple(d -> μδx[(i - 1) * Dim + d], Dim))
@@ -464,11 +593,11 @@ end
 
 # MacKay/Tipping fixed-point update α = γ/μ², eq. (mackay_updates), with the EM update as a
 # safe fallback for undetermined components.
-function _mackay_precisions(α::AbstractVector, μ::AbstractVector, Σpost::AbstractMatrix, α_em::AbstractVector)
-    d = diag(Σpost)
+function _mackay_precisions(α::AbstractVector, post::CoefficientPosterior, α_em::AbstractVector)
+    d = diag(post.cov)
     return map(eachindex(α)) do i
         γ = 1 - α[i] * d[i]
-        μ2 = abs2(μ[i])
+        μ2 = abs2(post.mean[i])
         if γ <= 0
             α_em[i]
         elseif μ2 < 1e-300
@@ -480,19 +609,8 @@ function _mackay_precisions(α::AbstractVector, μ::AbstractVector, Σpost::Abst
 end
 
 # ------------------------------------------------------------------------------------
-# Source positions: hard-coded gradient descent on the expected misfit
+# Phase 2: moving the source positions by gradient descent
 # ------------------------------------------------------------------------------------
-
-# The whitened columns that one source at position χ contributes to the augmented design
-# Φ = [W M; V]: with boundary uncertainty (Σδx given) the V rows come from the Γ factor of
-# the source's own gradient columns.
-function _source_basis(χ::SVector, medium, bd, iscomplex::Bool, W, Σδx, w, d_m::Int)
-    Φj = W * _stacked_system_matrix([χ], medium, bd, iscomplex)
-    if Σδx !== nothing
-        Φj = vcat(Φj, _gamma_factor(system_matrix_gradient([χ], medium, bd), Σδx, w, d_m))
-    end
-    return Φj
-end
 
 # One gradient-descent step with backtracking on the expected misfit R of eq. (R) as a
 # function of the position χ of a single source, holding the coefficient posterior q(a) and
@@ -504,9 +622,10 @@ end
 # steps that bring the source closer than `clearance` to a boundary point are rejected,
 # since such near-singular columns just chase individual sensors.
 function _descend_step(χ::SVector{Dim, Float64}, basis, Φ::AbstractMatrix,
-        cols::AbstractVector{Int}, μ::AbstractVector, Σpost::AbstractMatrix,
+        cols::AbstractVector{Int}, post::CoefficientPosterior,
         ĝ::AbstractVector, pts, clearance::Real) where Dim
 
+    μ, Σpost = post.mean, post.cov
     others = setdiff(axes(Φ, 2), cols)
     r = ĝ - Φ[:, others] * μ[others]              # residual without this source
     μj = μ[cols]
@@ -538,24 +657,24 @@ function _descend_step(χ::SVector{Dim, Float64}, basis, Φ::AbstractMatrix,
     return χ, false
 end
 
-# `source_position_iters` rounds of: one descent step on the position of the source with
-# columns `cols` of Φ, then a re-solve of the coefficient posterior q(a) — alternating the
-# two lets the source travel far while its amplitude follows, where descent at fixed q(a)
-# stalls after a short move. Both parts increase the bound F, so the alternation does too.
-# The moved columns are written into Φ; returns the position and the refreshed posterior.
+# `iters` rounds of: one descent step on the position of the source with columns `cols` of Φ,
+# then a re-solve of the coefficient posterior q(a) — alternating the two lets the source
+# travel far while its amplitude follows, where descent at fixed q(a) stalls after a short
+# move. Both parts increase the bound F, so the alternation does too. The moved columns are
+# written into Φ; returns the position and the refreshed posterior.
 function _optimise_source_position!(Φ::AbstractMatrix, cols::AbstractVector{Int}, basis,
         χ0::SVector, α::AbstractVector, ĝ::AbstractVector, iters::Int, pts, clearance::Real)
 
     χ = χ0
-    μ, Σpost, logdetΣ = _coefficient_posterior(Φ, α, ĝ)
+    post = _coefficient_posterior(Φ, α, ĝ)
     for _ in 1:iters
-        χnew, moved = _descend_step(χ, basis, Φ, cols, μ, Σpost, ĝ, pts, clearance)
+        χnew, moved = _descend_step(χ, basis, Φ, cols, post, ĝ, pts, clearance)
         moved || break
         χ = χnew
         Φ[:, cols] = basis(χ)
-        μ, Σpost, logdetΣ = _coefficient_posterior(Φ, α, ĝ)
+        post = _coefficient_posterior(Φ, α, ĝ)
     end
-    return χ, μ, Σpost, logdetΣ, χ != χ0
+    return χ, post, χ != χ0
 end
 
 # ------------------------------------------------------------------------------------
@@ -566,8 +685,8 @@ end
 # independent of α; the limit ℓ(∞) = 0 is the column switched off.
 _log_evidence_1(α::Real, s::Real, q::Real) = isinf(α) ? 0.0 : (log(α / (α + s)) + q^2 / (α + s)) / 2
 
-# Relative drift of the S, Q recurrence of `_add_sources!`, measured against ‖φᵢ‖², at which
-# the factors are re-evaluated exactly.
+# Relative drift of the S, Q recurrence of `_select_columns`, measured against ‖φᵢ‖², at
+# which the factors are re-evaluated exactly.
 const SQ_REFRESH_TOL = 1e-9
 
 # The sparsity and quality factors S = diag(ΦᵀC⁻¹Φ) and Q = ΦᵀC⁻¹ĝ of every candidate column,
@@ -575,7 +694,7 @@ const SQ_REFRESH_TOL = 1e-9
 # Through Woodbury, C⁻¹ = I - Φ_A Σ Φ_Aᵀ with Σ = (Φ_AᵀΦ_A + A)⁻¹ = (L Lᵀ)⁻¹, both follow from
 # Y = L⁻¹B alone, given the Gram rows B = Φ_Aᵀ Φ of the active columns `bcols`:
 #     S = diag(ΦᵀΦ) - diag(YᵀY),   Q = Φᵀĝ - Yᵀ(L⁻¹ Φ_Aᵀĝ).
-# This is the O(k²K) anchor of the recurrence in `_add_sources!`, not its per-action cost.
+# This is the O(k²K) anchor of the recurrence in `_select_columns`, not its per-action cost.
 function _sq_factors(Φnorm2::AbstractVector, Φtĝ::AbstractVector, B::AbstractMatrix,
         bcols::AbstractVector{Int}, α::AbstractVector)
 
@@ -586,12 +705,11 @@ function _sq_factors(Φnorm2::AbstractVector, Φtĝ::AbstractVector, B::Abstract
     return S, Q
 end
 
-# Sparse Bayesian learning at fixed candidate positions, run constructively: starting from
-# no sources, apply the single best action — add a column at its optimal precision
+# Sparse Bayesian learning at fixed source positions, run constructively: starting from no
+# columns, apply the single best action — add a column at its optimal precision
 # eq. (alpha_star), re-estimate the precision of an active column, or delete one — until no
 # action increases the evidence. Each action is the exact coordinate maximizer of the
-# evidence, so the bound increases monotonically. After each addition the position of the
-# added source is optionally refined by a few gradient-descent steps.
+# evidence, so the bound increases monotonically.
 #
 # What an action costs is decided by the sparsity and quality factors S, Q of ALL K candidate
 # columns. Read literally they ask for C⁻¹ = (I + Φ_A A⁻¹ Φ_Aᵀ)⁻¹ applied to the whole basis,
@@ -621,25 +739,17 @@ end
 # each action is its exact coordinate maximizer, so the evidence gain Δ of the chosen action
 # IS the increase of F: the history is accumulated from the bound of the empty model.
 #
-# Mutates src_pos (positions may move); returns the indices of the surviving sources, the
-# precisions of their columns, and the evidence-bound history.
-function _add_sources!(src_pos, medium, bd, iscomplex::Bool, W, w, d_m::Int, Σδx,
-        ĝ::AbstractVector, Nr::Int, noise_logdet::Real, FD::Int, solver)
+# Returns the precisions of all K candidate columns — Inf for those never switched on — and
+# the evidence-bound history.
+function _select_columns(Φ::AbstractMatrix, model::WorkingModel, solver::VariationalBayesianSolver)
 
-    n_src = length(src_pos)
-    K = (iscomplex ? 2 : 1) * n_src * FD
-
-    Vγ = Σδx === nothing ? nothing :
-        _gamma_factor(system_matrix_gradient(src_pos, medium, bd), Σδx, w, d_m)
-    Φ = _phi(W * _stacked_system_matrix(src_pos, medium, bd, iscomplex), Vγ)
-
+    ĝ = model.ĝ
+    K = size(Φ, 2)
     α = fill(Inf, K)
     elbo = Float64[]
-    pts = mean_points(bd)
-    clearance = _boundary_spacing(pts) / 2
 
-    # quantities of the whole candidate basis: they change only when Φ does, i.e. only when
-    # a source position moves
+    # quantities of the whole candidate basis: the positions are fixed throughout Phase 1,
+    # so Φ never changes and neither do these
     Φnorm2 = vec(sum(abs2, Φ; dims = 1))
     Φtĝ = transpose(Φ) * ĝ
 
@@ -656,12 +766,12 @@ function _add_sources!(src_pos, medium, bd, iscomplex::Bool, W, w, d_m::Int, Σ�
 
     # the bound of the empty model, from which the history is accumulated: no coefficients,
     # so the KL term vanishes and the expected misfit is ‖ĝ‖²
-    F_prev = _elbo(dot(ĝ, ĝ), Nr, noise_logdet, Float64[], Float64[], zeros(0, 0), 0.0)
+    F_empty = _elbo(model, dot(ĝ, ĝ), Float64[], _empty_posterior(), nothing)
+    F_prev = F_empty
 
     # one action per iteration, so this phase needs its own budget: a negative
     # `max_select_iters` asks for the automatic four-per-candidate-coefficient safety net
-    budget = solver.options.max_select_iters
-    budget < 0 && (budget = 4K)
+    budget = solver.max_select_iters < 0 ? 4K : solver.max_select_iters
 
     for _ in 1:budget
         # the single best action: for each column the leave-one-out factors s, q of
@@ -729,55 +839,42 @@ function _add_sources!(src_pos, medium, bd, iscomplex::Bool, W, w, d_m::Int, Σ�
             pop!(bcols)
         end
 
-        # refine the position of the newly added source by a few gradient-descent steps
-        moved = false
-        if added && solver.options.optimise_source_positions_flag && solver.options.source_position_iters > 0
-            j = mod(best_i - 1, n_src * FD) ÷ FD + 1
-            cols = _source_columns(j, n_src, FD, iscomplex)
-            sub = findall(c -> isfinite(α[c]), cols)      # this source's active columns
-            keep = findall(isfinite, α)
-            basis = χ -> _source_basis(χ, medium, bd, iscomplex, W, Σδx, w, d_m)
-            χ, _, _, _, moved = _optimise_source_position!(
-                Φ[:, keep], findall(in(cols[sub]), keep), χc -> basis(χc)[:, sub],
-                src_pos[j], α[keep], ĝ, solver.options.source_position_iters, pts, clearance
-            )
-            if moved
-                src_pos[j] = χ
-                Φ[:, cols] = basis(χ)
-            end
-        end
-
-        # monitor the bound: the chosen action is the exact coordinate maximizer of the
-        # evidence, so its gain is the increase of F. A source that moved changes Φ, and with
-        # it every cached quantity and the bound itself, so there everything is rebuilt.
-        if moved
-            Φnorm2 = vec(sum(abs2, Φ; dims = 1))
-            Φtĝ = transpose(Φ) * ĝ
-            isempty(bcols) || mul!(view(B, eachindex(bcols), :), transpose(Φ[:, bcols]), Φ)
-            μ, Σpost, logdetΣ = _coefficient_posterior(Φ[:, bcols], α[bcols], ĝ)
-            R = _expected_misfit(Φ[:, bcols], μ, Σpost, ĝ)
-            F_prev = _elbo(R, Nr, noise_logdet, α[bcols], μ, Σpost, logdetΣ)
-        else
-            F_prev += best_Δ
-        end
+        # the chosen action is the exact coordinate maximizer of the evidence, so its gain is
+        # the increase of F, and no re-solve is needed to monitor the bound
+        F_prev += best_Δ
         push!(elbo, F_prev)
 
-        # re-anchor the recurrence when its drift shows, or when a moved source invalidated
-        # the basis it is built on
-        if drifted || moved
-            S, Q = _sq_factors(Φnorm2, Φtĝ, view(B, eachindex(bcols), :), bcols, α)
-        end
+        drifted && ((S, Q) = _sq_factors(Φnorm2, Φtĝ, view(B, eachindex(bcols), :), bcols, α))
     end
 
     if !any(isfinite, α)
         @warn "no candidate source explains the data beyond the noise; keeping the best one"
-        i = argmax(abs2.(Φtĝ) ./ Φnorm2)
-        α[i] = ALPHA_CAP
+        α[argmax(abs2.(Φtĝ) ./ Φnorm2)] = ALPHA_CAP
     end
 
-    keep_src = [j for j in 1:n_src if any(isfinite, α[_source_columns(j, n_src, FD, iscomplex)])]
-    cols = _kept_columns(keep_src, n_src, FD, iscomplex)
-    return keep_src, min.(α[cols], ALPHA_CAP), elbo
+    # The history above was accumulated from per-action evidence gains, never re-derived. Close
+    # the loop the way the section "Monitoring the bound" prescribes: evaluate F exactly at the
+    # selected model and compare. Agreement certifies the whole S, Q recurrence; disagreement is
+    # the only symptom a drifted recurrence has. The comparison is against the evidence the
+    # phase claims to have GAINED, not against F itself: the gain is the sum of a few thousand
+    # exact per-action increments, so a small relative slip in each is expected and harmless,
+    # whereas a discrepancy of the order of the gain means the recurrence — and with it the
+    # choice of sources — has come apart.
+    if !isempty(bcols) && !isempty(elbo)
+        post = _coefficient_posterior(Φ[:, bcols], α[bcols], ĝ)
+        F_exact = _elbo(model, _expected_misfit(Φ[:, bcols], post, ĝ), α[bcols], post, nothing)
+        gain = elbo[end] - F_empty
+        if abs(F_exact - elbo[end]) > 1e-3 * max(abs(gain), 1 + abs(F_exact))
+            @warn(
+                "the evidence recurrence of the source selection has drifted from the bound it " *
+                "claims to maximize: the selected set is not trustworthy",
+                accumulated = elbo[end], exact = F_exact, gained = gain, selected = length(bcols)
+            )
+        end
+        elbo[end] = F_exact
+    end
+
+    return α, elbo
 end
 
 # ------------------------------------------------------------------------------------
@@ -787,180 +884,143 @@ end
 function solve(sim::Simulation{VariationalBayesianSolver, Dim}) where Dim
 
     solver = sim.solver
-    medium = sim.medium
-    FD = field_dimension(medium)
     bd = sim.boundary_data
-
     src_pos = Vector{SVector{Dim, Float64}}(sim.source_positions)
-    M0 = system_matrix(src_pos, medium, bd)
-    iscomplex = eltype(M0) <: Complex
 
-    # --- data g (subtracting any particular solution) and its known noise variance,
-    #     both taken from the boundary data ---
-    g0, noise = _data_and_noise(bd, FD, iscomplex)
-    g_particular = field(medium, bd, sim.particular_solution)
-    g0 = g0 - vcat(g_particular...)
+    # An uncertain boundary enters at two levels, controlled separately. The boundary factor
+    # q(δx) exists as soon as Σ_x is to be used at all: frozen at its prior it contributes
+    # only the ridge Γ of eq. (Gamma_x) — the closed-form evidence bound of the section
+    # "A closed-form evidence bound: boundary variance as pseudo-data" — and E-step II then
+    # additionally learns δx. Phase 1 always runs in the first regime, as the theory prescribes.
+    sx2 = _boundary_variances(sim, solver)
+    boundary = sx2 === nothing ? nothing : BoundaryFactor(sx2)
+    learn_geometry = solver.update_geometry_flag && boundary !== nothing
 
-    g = iscomplex ? Vector{Float64}(vcat(real.(g0), imag.(g0))) : Vector{Float64}(g0)
-    Nr = length(g)
-
-    # measurement-noise precision w (= Σ⁻¹) and log|Σ|, from either a diagonal (vector of
-    # variances) or a full (matrix) noise covariance
-    w, noise_logdet = if noise isa AbstractVector
-        all(>(0), noise) || throw(ArgumentError("all measurement noise variances must be positive"))
-        (1 ./ noise, sum(log, noise))
-    else
-        Cf = cholesky(Symmetric(Matrix(noise)))
-        (Matrix(Symmetric(inv(Cf))), logdet(Cf))
+    model = _working_model(sim, boundary !== nothing)
+    if boundary !== nothing && !(model.w isa AbstractVector)
+        throw(ArgumentError("an uncertain boundary requires independent (diagonal) sensor noise; the boundary `fields` covariance must be diagonal"))
     end
-    W = _whitener(w)
 
-    # --- geometry prior Σ_x (diagonal) ---
-    Σx_raw = cov(bd.boundary_shape.boundary_points)
-    do_geometry = solver.options.update_geometry_flag && !(Σx_raw isa UniformScaling)
-    if do_geometry && iscomplex
-        throw(ArgumentError("geometry updates are not implemented for complex-valued problems"))
+    # INFERRING the boundary rests on the linearization eq. (linearization_M), and M varies on
+    # the scale of the distance from a source to the boundary: a source closer to the boundary
+    # than a few standard deviations of Σ_x has no meaningful first-order expansion, so any δx
+    # estimated through it is meaningless rather than merely uncertain. The ridge alone is not
+    # subject to this — Γ is a well-defined quadratic penalty on the coefficients whatever Σ_x
+    # is taken to mean — so this warns only when E-step II is going to move the boundary.
+    prior_scale = learn_geometry ? sqrt(maximum(sx2)) : 0.0
+    if learn_geometry
+        pts0 = mean_points(bd)
+        too_close = count(χ -> minimum(norm(χ - p) for p in pts0) < 3 * prior_scale, src_pos)
+        too_close > 0 && @warn(
+            "some sources lie closer to the boundary than the boundary is uncertain, where " *
+            "the linearization of M in δx — and with it the ridge Γ — has no meaning; move " *
+            "them further in, or reduce Σ_x",
+            boundary_prior_std = prior_scale,
+            sources_within_3_std = too_close,
+            of = length(src_pos)
+        )
     end
-    if do_geometry && !(w isa AbstractVector)
-        throw(ArgumentError("geometry updates require independent (diagonal) sensor noise; the boundary `fields` covariance must be diagonal"))
-    end
-    sx2 = do_geometry ? Vector{Float64}(diag(Σx_raw)) : nothing
 
-    bd_current = bd
-    n_sensors = length(mean_points(bd))
-    d_m = size(M0, 1) ÷ n_sensors
-
-    Σδx = do_geometry ? Matrix(Diagonal(sx2)) : nothing            # initialize q(δx) at the prior
-    logdetΣδx = do_geometry ? sum(log.(sx2)) : 0.0
-    μδx = do_geometry ? zeros(length(sx2)) : nothing
-    # prior mean of δx relative to the current linearization point: the prior of the
-    # boundary stays anchored at the original nominal boundary μ_x0 across re-centerings
-    x_nominal = do_geometry ? Vector{Float64}(vcat(mean_points(bd)...)) : nothing
-    m0 = do_geometry ? zeros(length(sx2)) : nothing
-
-    # whitened data of the augmented model: the Γ ridge rows carry zero data
-    ĝ = do_geometry ? vcat(W * g, zeros(Nr * Dim)) : W * g
-
+    M, gradM, Φ = _assemble(model, bd, src_pos, boundary)
     elbo_history = Float64[]
 
     # --- Phase 1: add one source at a time by the exact evidence criterion ---
-    if solver.ard_prune_flag && solver.options.learn_prior_flag
-        keep_src, α, elbo1 = _add_sources!(src_pos, medium, bd_current, iscomplex,
-            W, w, d_m, Σδx, ĝ, Nr, noise_logdet, FD, solver)
-        src_pos = src_pos[keep_src]
+    if solver.select_sources_flag && solver.learn_prior_flag
+        α_all, elbo1 = _select_columns(Φ, model, solver)
+        keep, cols = _active_sources(model, α_all, length(src_pos), Inf)
+        α = min.(α_all[cols], ALPHA_CAP)
+        src_pos = src_pos[keep]
+        M, Φ = M[:, cols], Φ[:, cols]
+        gradM === nothing || (gradM = gradM[:, cols, :])
         append!(elbo_history, elbo1)
     else
-        n_src = length(src_pos)
-        Kh = n_src * FD
-        α = _initial_precisions(solver.prior_variance, iscomplex ? 2Kh : Kh, Kh, iscomplex)
+        α = _initial_precisions(solver.prior_variance, model, length(src_pos))
     end
 
-    # --- Phase 2: variational EM on the selected sources ---
-    M = _stacked_system_matrix(src_pos, medium, bd_current, iscomplex)
-    gradM = do_geometry ? system_matrix_gradient(src_pos, medium, bd_current) : nothing
-    Vγ = do_geometry ? _gamma_factor(gradM, Σδx, w, d_m) : nothing
-    Φ = _phi(W * M, Vγ)
-
+    # --- Phase 2: variational EM on the selected sources (Algorithm 1) ---
+    x_nominal = Vector{Float64}(vcat(mean_points(bd)...))
     baseline_resets = Int[]
     recenter_iterations = Int[]
     # continue monitoring from the last Phase-1 value: the bound is comparable across the
     # transition, so the MacKay fallback also guards the first Phase-2 iteration
     F_prev = isempty(elbo_history) ? -Inf : elbo_history[end]
-    μ = zeros(length(α))
-    Σpost = Matrix{Float64}(I, length(α), length(α))
-    logdetΣ = 0.0
+    post = _empty_posterior()
 
-    for _ in 1:solver.options.max_iters
+    for _ in 1:solver.max_iters
         reset_baseline = false
 
         # --- E-step I: update q(a), eq. (vb_coefficient_update) ---
-        μ, Σpost, logdetΣ = _coefficient_posterior(Φ, α, ĝ)
+        post = _coefficient_posterior(Φ, α, model.ĝ)
 
         # --- E-step II: update q(δx) and re-center, eq. (vb_boundary_update) ---
-        if do_geometry
-            μδx, Σδx, logdetΣδx = _boundary_posterior(M, gradM, μ, Σpost, w, g, sx2, m0, d_m, Dim)
-            step = norm(μδx, Inf)
-            prior_scale = sqrt(maximum(sx2))
+        if learn_geometry
+            _update_boundary!(boundary, model, M, gradM, post)
+            step = norm(boundary.mean, Inf)
             if step > 1e-6 * prior_scale
-                bd_current = _recenter_boundary(bd_current, μδx, Dim)
-                M = _stacked_system_matrix(src_pos, medium, bd_current, iscomplex)
-                gradM = system_matrix_gradient(src_pos, medium, bd_current)
-                μδx = zero(μδx)
-                m0 = x_nominal - Vector{Float64}(vcat(mean_points(bd_current)...))
+                bd = _recenter_boundary(bd, boundary.mean)
+                fill!(boundary.mean, 0.0)
+                boundary.prior_mean = x_nominal - Vector{Float64}(vcat(mean_points(bd)...))
                 push!(recenter_iterations, length(elbo_history) + 1)
                 # only a significant move of the linearization point counts as a model
                 # change, across which values of the bound are not comparable
                 reset_baseline = step > 1e-2 * prior_scale
             end
-            Vγ = _gamma_factor(gradM, Σδx, w, d_m)
-            Φ = _phi(W * M, Vγ)
+            M, gradM, Φ = _assemble(model, bd, src_pos, boundary)
         end
 
         # --- M-step: prior precisions, EM update eq. (alpha_update) ---
-        α_em = 1 ./ (abs2.(μ) .+ diag(Σpost))
-        if solver.options.learn_prior_flag
-            α_new = solver.mackay_acceleration_flag ? _mackay_precisions(α, μ, Σpost, α_em) : α_em
+        α_em = 1 ./ (abs2.(post.mean) .+ diag(post.cov))
+        if solver.learn_prior_flag
+            α_new = solver.mackay_acceleration_flag ? _mackay_precisions(α, post, α_em) : α_em
             α = min.(α_new, ALPHA_CAP)
         end
 
         # --- ARD pruning: remove sources whose every precision has diverged ---
-        if solver.options.learn_prior_flag && solver.ard_prune_flag
+        if solver.learn_prior_flag && solver.ard_prune_flag
             n_active = length(src_pos)
-            keep = [j for j in 1:n_active if any(α[_source_columns(j, n_active, FD, iscomplex)] .< solver.ard_threshold)]
+            keep, cols = _active_sources(model, α, n_active, solver.ard_threshold)
             if isempty(keep)
                 @warn "automatic relevance determination switched off every source; keeping the most relevant one"
-                keep = [argmin([minimum(α[_source_columns(j, n_active, FD, iscomplex)]) for j in 1:n_active])]
+                keep = [argmin([minimum(α[_source_columns(model, j, n_active)]) for j in 1:n_active])]
+                cols = _kept_columns(model, keep, n_active)
             end
             if length(keep) < n_active
-                cols = _kept_columns(keep, n_active, FD, iscomplex)
-                α = α[cols]
-                α_em = α_em[cols]
-                μ = μ[cols]
-                Σpost = Σpost[cols, cols]
-                logdetΣ = logdet(cholesky(Symmetric(Σpost)))
-                M = M[:, cols]
-                Φ = Φ[:, cols]
+                α, α_em = α[cols], α_em[cols]
+                post = _restrict(post, cols)
+                M, Φ = M[:, cols], Φ[:, cols]
+                gradM === nothing || (gradM = gradM[:, cols, :])
                 src_pos = src_pos[keep]
-                if do_geometry
-                    gradM = gradM[:, _kept_columns(keep, n_active, FD, false), :]
-                    Vγ = Vγ[:, cols]
-                end
                 reset_baseline = true
             end
         end
 
         # --- M-step: source positions χ, a few gradient-descent steps per source ---
-        if solver.options.optimise_source_positions_flag && solver.options.source_position_iters > 0
-            pts = mean_points(bd_current)
+        if solver.optimise_source_positions_flag && solver.source_position_iters > 0
+            pts = mean_points(bd)
             clearance = _boundary_spacing(pts) / 2
             moved_any = false
             for j in eachindex(src_pos)
-                cols = _source_columns(j, length(src_pos), FD, iscomplex)
-                basis = χ -> _source_basis(χ, medium, bd_current, iscomplex, W, Σδx, w, d_m)
-                χ, μ, Σpost, logdetΣ, moved = _optimise_source_position!(Φ, cols, basis,
-                    src_pos[j], α, ĝ, solver.options.source_position_iters, pts, clearance)
+                cols = _source_columns(model, j, length(src_pos))
+                basis = χ -> _design(model, bd, [χ], boundary)
+                χ, post, moved = _optimise_source_position!(Φ, cols, basis, src_pos[j], α,
+                    model.ĝ, solver.source_position_iters, pts, clearance)
                 if moved
                     src_pos[j] = χ
                     moved_any = true
                 end
             end
-            if moved_any
-                M = _stacked_system_matrix(src_pos, medium, bd_current, iscomplex)
-                do_geometry && (gradM = system_matrix_gradient(src_pos, medium, bd_current))
-            end
+            moved_any && ((M, gradM, Φ) = _assemble(model, bd, src_pos, boundary))
         end
 
         # --- monitor the bound, eq. (elbo_model) ---
-        R = _expected_misfit(Φ, μ, Σpost, ĝ)
-        F = _elbo(R, Nr, noise_logdet, α, μ, Σpost, logdetΣ;
-            μδx = μδx, Σδx = Σδx, logdetΣδx = logdetΣδx, sx2 = sx2, m0 = m0)
+        R = _expected_misfit(Φ, post, model.ĝ)
+        F = _elbo(model, R, α, post, boundary)
 
         # MacKay acceleration carries no monotonicity guarantee: fall back to the EM update
         # whenever the bound fails to increase (Section on ARD of the theory document).
-        if solver.options.learn_prior_flag && solver.mackay_acceleration_flag && !reset_baseline && F < F_prev
+        if solver.learn_prior_flag && solver.mackay_acceleration_flag && !reset_baseline && F < F_prev
             α = min.(α_em, ALPHA_CAP)
-            F = _elbo(R, Nr, noise_logdet, α, μ, Σpost, logdetΣ;
-                μδx = μδx, Σδx = Σδx, logdetΣδx = logdetΣδx, sx2 = sx2, m0 = m0)
+            F = _elbo(model, R, α, post, boundary)
         end
 
         push!(elbo_history, F)
@@ -972,25 +1032,23 @@ function solve(sim::Simulation{VariationalBayesianSolver, Dim}) where Dim
     end
 
     # --- final inference at the learned hyperparameters ---
-    μ, Σpost, logdetΣ = _coefficient_posterior(Φ, α, ĝ)
-    R = _expected_misfit(Φ, μ, Σpost, ĝ)
-    misfit_ratio = R / Nr
-
-    relative_boundary_error = norm(M * μ - g) / norm(g)
+    post = _coefficient_posterior(Φ, α, model.ĝ)
+    misfit_ratio = _expected_misfit(Φ, post, model.ĝ) / length(model.g)
+    relative_boundary_error = norm(M * post.mean - model.g) / norm(model.g)
 
     # complex coefficients keep their posterior covariance over the stacked real degrees
     # of freedom [Re a; Im a], the convention of FundamentalSolution
-    coefficients = if iscomplex
-        Khh = length(src_pos) * FD
-        μ[1:Khh] .+ im .* μ[(Khh + 1):end]
+    coefficients = if model.iscomplex
+        Khh = length(src_pos) * model.field_dim
+        post.mean[1:Khh] .+ im .* post.mean[(Khh + 1):end]
     else
-        copy(μ)
+        copy(post.mean)
     end
 
-    fsol = FundamentalSolution(medium;
+    fsol = FundamentalSolution(model.medium;
         positions = collect(src_pos),
         coefficients = coefficients,
-        coefficients_covariance = Σpost,
+        coefficients_covariance = post.cov,
         particular_solution = sim.particular_solution,
         relative_boundary_error = relative_boundary_error
     )
@@ -998,15 +1056,15 @@ function solve(sim::Simulation{VariationalBayesianSolver, Dim}) where Dim
     # all the boundary information is returned as a BoundaryShape: when the geometry was
     # updated, the posterior of the boundary points is an MvNormal with the re-centered
     # boundary as mean and Σ_δx as covariance; otherwise the input shape is passed through
-    boundary_shape = if do_geometry
-        shape = bd_current.boundary_shape
+    boundary_shape = if learn_geometry
+        shape = bd.boundary_shape
         posterior_points = MvNormal(
-            Vector{Float64}(vcat(mean_points(bd_current)...)),
-            Symmetric(Σδx)
+            Vector{Float64}(vcat(mean_points(bd)...)),
+            Symmetric(boundary.cov)
         )
         BoundaryShape(posterior_points, shape.normals, shape.interior_points)
     else
-        bd.boundary_shape
+        sim.boundary_data.boundary_shape
     end
 
     return VariationalSolution(
