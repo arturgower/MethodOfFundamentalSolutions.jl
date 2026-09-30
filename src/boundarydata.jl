@@ -5,157 +5,215 @@ A type used to specify what type of physical field, such as traction or displace
 """
 abstract type FieldType end
 
-"""
-    BoundaryData(field_type::F; boundary_points = , fields = , interior_points = , outward_normals = ) where {F <: FieldType}
+# --- Representations of possibly-uncertain point sets ---
+# The boundary points and the normals of a `BoundaryShape` (and the fields of a
+# `BoundaryData`) can each be given in one of three forms:
+#   1. a plain vector of (static) vectors                      — deterministic values;
+#   2. a single `MvNormal` over the flattened values           — a joint Gaussian;
+#   3. a vector of independent `MvNormal`s, one per point      — independent Gaussians.
+# The helpers below convert between these forms: `struct_points` returns the mean as a
+# `Vector{SVector{Dim}}`, `flat_points` returns the mean flattened, and the standard `cov`
+# (from Statistics, re-exported by Distributions) is extended to return the covariance of
+# the flattened values; plain vectors are deterministic, so their covariance is `0.0 * I`.
 
-A [`Shape`](@ref) defined by a set of points on the boundary with no particular order in the data. 
+import Statistics: cov
 
-Type parameters
-- F <: FieldType: the physical field witehr displacement or traction.
-- Dim: Integer-sized compile-time dimension of the spatial dimension
+cov(x::AbstractVector{<:AbstractVector}) = 0.0 * I
+cov(x::AbstractVector{<:AbstractMvNormal}) = cat(cov.(x)...; dims = (1, 2))
 
-Fields
-- `interior_points::Vector{SVector{Dim,Float64}}`
-    A vector of spatial points in the interior of the domain used to determine what is inside the domain. See
-@doc in(x::AbstractVector, cloud::PointCloud).
-- `points::Vector{SVector{Dim,Float64}}`
-    A vector of spatial points on the boundary
-- `fields::Vector{SVector{Dim,Float64}}`
-    `fields[i]` is the value of the physical field at `points[i]`
-
-Notes
-- It is expected that `length(points) == length(fields)` and that entries are aligned by index.
-"""
-struct BoundaryData{F <: FieldType, Dim, S, FS} <: Shape{Dim}
-    fieldtype::F
-    boundary_points::S  # Can be Vector{SVector} OR AbstractMvNormal
-    fields::FS           # Can be Vector{SVector} OR AbstractMvNormal
-    outward_normals::Vector{SVector{Dim,Float64}}
-    interior_points::Vector{SVector{Dim,Float64}}
-end
-
-# --- Accessors for FIELDS (FS) ---
-# If it's already a Vector of SVectors:
-struct_fields(fields::AbstractVector, Dim) = fields
-flat_fields(fields::AbstractVector)        = vcat(fields...)
-cov_fields(fields::AbstractVector)         = 0.0 * I
-
-# If it's a literal Distributions.MvNormal:
-function struct_fields(fields::AbstractMvNormal, Dim)
-    m = mean(fields)
-    return Vector(reinterpret(SVector{Dim, eltype(m)}, m))
-end
-flat_fields(fields::AbstractMvNormal) = mean(fields)
-cov_fields(fields::AbstractMvNormal)  = cov(fields)
-
-
-# --- Accessors for BOUNDARY POINTS (S) ---
 struct_points(points::AbstractVector, Dim) = points
-flat_points(points::AbstractVector)        = vcat(points...)
-cov_points(points::AbstractVector)         = 0.0 * I
-
 function struct_points(points::AbstractMvNormal, Dim)
     m = mean(points)
     return Vector(reinterpret(SVector{Dim, eltype(m)}, m))
 end
+struct_points(points::AbstractVector{<:AbstractMvNormal}, Dim) =
+    [SVector{Dim, Float64}(mean(d)) for d in points]
+
+flat_points(points::AbstractVector) = vcat(points...)
 flat_points(points::AbstractMvNormal) = mean(points)
-cov_points(points::AbstractMvNormal)  = cov(points)
+flat_points(points::AbstractVector{<:AbstractMvNormal}) = vcat(mean.(points)...)
 
-function BoundaryData(field_type::F; 
-        boundary_points = [zeros(Float64, 2)], 
-        fields = nothing,
-        interior_points = nothing,
-        outward_normals = nothing,
-        Dim = 2 
-    ) where {F <: FieldType}
+# the fields are flattened and restructured exactly like the points
+const struct_fields = struct_points
+const flat_fields = flat_points
 
-    # 1. Resolve spatial dimension safely
-    # If boundary_points is NOT a distribution, auto-deduce it to respect the user's input type
-    actual_Dim = (boundary_points isa AbstractMvNormal) ? Dim : length(first(boundary_points))
+"""
+    BoundaryShape{Dim,P,N} <: Shape{Dim}
 
-    # 2. Re-structure points and find count N
-    pts_structured = struct_points(boundary_points, actual_Dim)
-    N = length(pts_structured)
+The geometry of a domain, defined by a set of points on its boundary with no particular
+order. The boundary points and the normals may each be deterministic (a vector of vectors)
+or uncertain: a single `MvNormal` over the flattened values, or a vector of `MvNormal`s,
+one per point. Use [`mean_points`](@ref) and [`mean_normals`](@ref) to obtain their means
+as `Vector{SVector{Dim,Float64}}` regardless of the representation, and `cov` for the
+covariance of the flattened values (`0.0 * I` when deterministic).
 
-    # 3. Handle default fields fallback
-    resolved_fields = isnothing(fields) ? [pts_structured[1] .* 0.0] : fields
+# Fields
+- `boundary_points::P`: the points on the boundary, in any of the forms above.
+- `normals::N`: the outward normals, aligned by index with the boundary points, in any of
+  the forms above.
+- `interior_points::Vector{SVector{Dim,Float64}}`: points in the interior of the domain,
+  used to determine what is inside the domain, see `in(x::AbstractVector, ::BoundaryShape)`.
 
-    # 4. Safely resolve field dimension (FieldDim)
-    if resolved_fields isa AbstractMvNormal
-        total_field_length = length(mean(resolved_fields))
-        actual_FieldDim = total_field_length ÷ N
-    else
-        actual_FieldDim = length(first(resolved_fields))
-    end
+# Keyword constructor
+    BoundaryShape(; boundary_points, normals = nothing, interior_points = nothing, Dim = 2)
 
-    # 5. Geometrical fallbacks
-    actual_interior = isnothing(interior_points) ? [mean(pts_structured)] : interior_points
-    
-    actual_normals = isnothing(outward_normals) ? 
-                     compute_outward_normals(pts_structured, actual_interior) : 
-                     outward_normals
-
-    actual_normals = [n / norm(n) for n in actual_normals]
-
-    return BoundaryData{F, actual_Dim, typeof(boundary_points), typeof(resolved_fields)}(
-        field_type, boundary_points, resolved_fields, actual_normals, actual_interior
-    )
+Omitted `interior_points` default to the mean of the boundary points; omitted `normals` are
+estimated with [`compute_outward_normals`](@ref). Deterministic normals are normalized to
+unit length. `Dim` is deduced from the boundary points except when they are a single
+`MvNormal` over the flattened values, where it cannot be and must be given.
+"""
+struct BoundaryShape{Dim, P, N} <: Shape{Dim}
+    boundary_points::P
+    normals::N
+    interior_points::Vector{SVector{Dim,Float64}}
 end
 
+function BoundaryShape(;
+        boundary_points = [zeros(Float64, 2)],
+        normals = nothing,
+        interior_points = nothing,
+        Dim = 2
+    )
+
+    # the spatial dimension can be deduced except for a single flattened MvNormal
+    actual_Dim = (boundary_points isa AbstractMvNormal) ? Dim : length(first(boundary_points))
+
+    pts = struct_points(boundary_points, actual_Dim)
+
+    interior = isnothing(interior_points) ? [mean(pts)] : interior_points
+    interior = [SVector{actual_Dim, Float64}(p) for p in interior]
+
+    actual_normals = isnothing(normals) ? compute_outward_normals(pts, interior) : normals
+
+    # deterministic normals are normalized; uncertain ones are stored as given
+    if actual_normals isa AbstractVector{<:AbstractVector{<:Real}}
+        actual_normals = [SVector{actual_Dim, Float64}(n / norm(n)) for n in actual_normals]
+    end
+
+    return BoundaryShape(boundary_points, actual_normals, interior)
+end
+
+"""
+    mean_points(shape::BoundaryShape)
+
+The mean of the boundary points as a `Vector{SVector{Dim,Float64}}`, whichever of the three
+representations (deterministic, joint `MvNormal`, per-point `MvNormal`s) they are stored in.
+"""
+mean_points(shape::BoundaryShape{Dim}) where Dim = struct_points(shape.boundary_points, Dim)
+
+"""
+    mean_normals(shape::BoundaryShape)
+
+The mean of the normals as a `Vector{SVector{Dim,Float64}}`; see [`mean_points`](@ref).
+"""
+mean_normals(shape::BoundaryShape{Dim}) where Dim = struct_points(shape.normals, Dim)
+
+"""
+    BoundaryData(field_type::F; fields = , boundary_shape = , boundary_points = , normals = , interior_points = )
+
+The physical data on a boundary: a [`BoundaryShape`](@ref) together with the values
+`fields` of the physical field on the boundary points.
+
+# Type parameters
+- `F <: FieldType`: the physical field, e.g. displacement or traction.
+- `Dim`: the spatial dimension.
+
+# Fields
+- `fieldtype::F`
+- `boundary_shape::BS` where `BS <: BoundaryShape{Dim}`: the geometry of the boundary.
+- `fields::FS`: `fields[i]` is the value of the physical field at boundary point `i`. Like
+  the boundary points, the fields may be a plain vector of vectors, a single `MvNormal`
+  over the flattened values (whose covariance is the sensor noise), or a vector of
+  `MvNormal`s, one per point.
+
+The keyword constructor either takes a ready-made `boundary_shape`, or builds one from
+`boundary_points`, `normals` and `interior_points` (see [`BoundaryShape`](@ref)).
+`BoundaryData` is itself a `Shape`: `in`, `bounding_box` and `points_in_shape` delegate to
+its `boundary_shape`.
+"""
+struct BoundaryData{F <: FieldType, Dim, BS <: BoundaryShape{Dim}, FS} <: Shape{Dim}
+    fieldtype::F
+    boundary_shape::BS
+    fields::FS
+end
+
+function BoundaryData(field_type::F;
+        boundary_shape = nothing,
+        boundary_points = [zeros(Float64, 2)],
+        fields = nothing,
+        normals = nothing,
+        interior_points = nothing,
+        Dim = 2
+    ) where {F <: FieldType}
+
+    shape = isnothing(boundary_shape) ?
+        BoundaryShape(;
+            boundary_points = boundary_points,
+            normals = normals,
+            interior_points = interior_points,
+            Dim = Dim
+        ) :
+        boundary_shape
+
+    resolved_fields = isnothing(fields) ? [zero(first(mean_points(shape)))] : fields
+
+    return BoundaryData(field_type, shape, resolved_fields)
+end
+
+mean_points(bd::BoundaryData) = mean_points(bd.boundary_shape)
+mean_normals(bd::BoundaryData) = mean_normals(bd.boundary_shape)
+
 import MultipleScattering: name
+name(shape::BoundaryShape) = "BoundaryShape"
 name(shape::BoundaryData) = "BoundaryData"
 
-bounding_box(cloud::BoundaryData) = Box(cloud.boundary_points)
-
-# function BoundaryData(medium::Ph, bd::BoundaryData, psol::P) where {Ph <: PhysicalMedium,P <: ParticularSolution}
-#     fs = field(medium,bd,psol)
-   
-#     bd_particular = @set bd.fields = bd.fields + fs
-#     return bd_particular
-# end
+bounding_box(shape::BoundaryShape) = Box(mean_points(shape))
+bounding_box(bd::BoundaryData) = bounding_box(bd.boundary_shape)
 
 import Base.in
-function in(x::AbstractVector, cloud::BoundaryData)::Bool
+function in(x::AbstractVector, shape::BoundaryShape)::Bool
 
-    # find nearest interior point q to x. Then  find the point p on the boundary which is closest to crossing the line through x and q. The point x is in the interior if norm(x - q) < norm(p - q)
+    # find nearest interior point q to x. Then find the point p on the boundary which is closest to crossing the line through x and q. The point x is in the interior if norm(x - q) < norm(p - q)
 
-    dists = [sum((x - p) .^2) for p in cloud.interior_points];
-    q = cloud.interior_points[argmin(dists)]
+    pts = mean_points(shape)
+
+    dists = [sum((x - p) .^2) for p in shape.interior_points];
+    q = shape.interior_points[argmin(dists)]
 
     vec = (x - q) ./ norm(x - q)
 
     # q + t .* vec == p
-    dist_from_line = map(cloud.boundary_points) do p
+    dist_from_line = map(pts) do p
         t = dot(vec, p - q)
         t = (t < 0) ? 0.0 : t
         p_on_line = q + t .* vec
         norm(p_on_line - p)
     end
-    p = cloud.boundary_points[argmin(dist_from_line)]
+    p = pts[argmin(dist_from_line)]
 
-    inside = norm(x - q) < norm(p - q) ? true : false
-    return inside
+    return norm(x - q) < norm(p - q)
 end
+
+in(x::AbstractVector, bd::BoundaryData)::Bool = in(x, bd.boundary_shape)
 
 import Base.issubset
-function issubset(cloud::BoundaryData, box::Box)
-    cloud_box = bounding_box(cloud)
-    return issubset(cloud_box,box)
+function issubset(shape::Union{BoundaryShape, BoundaryData}, box::Box)
+    return issubset(bounding_box(shape), box)
 end
 
 """
-    issubset(box::Box, poly::PointCloud)
+    issubset(box::Box, shape::BoundaryShape)
 
-Returns true if the corners of the box are contained within polygon, false otherwise.
+Returns true if the corners of the box are contained within the shape, false otherwise.
 """
-function issubset(box::Box, cloud::BoundaryData)
-    return all(c ∈ cloud for c in corners(box))
+function issubset(box::Box, shape::Union{BoundaryShape, BoundaryData})
+    return all(c ∈ shape for c in corners(box))
 end
 
-function compute_outward_normals(boundary_points, interior_points; 
+function compute_outward_normals(boundary_points, interior_points;
         number_of_neighbours = min(2 * length(boundary_points[1]), max(1, length(boundary_points)-1))
     )
-    
+
     # number of neighbors to use (at least Dim+1, at most n-1)
     k = number_of_neighbours
 

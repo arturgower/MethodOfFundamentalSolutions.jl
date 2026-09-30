@@ -35,14 +35,14 @@ interior_points = [[0.0, 0.0]]
 bd = BoundaryData(TractionType(); 
         boundary_points = bd_points, 
         fields = bd_fields, 
-        outward_normals = normals,
+        normals = normals,
         interior_points = interior_points
     )
 
 bdplot=BoundaryData(TractionType(); 
         boundary_points = bd_points, 
         fields = real.(bd_fields), 
-        outward_normals = normals,
+        normals = normals,
         interior_points = interior_points
     )    
 #Nsources=length(bds[n].boundary_points)

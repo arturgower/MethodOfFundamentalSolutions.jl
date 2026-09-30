@@ -15,6 +15,17 @@ abstract type ParticularSolution end
 struct NoParticularSolution <: ParticularSolution end
 
 """
+    ParticularSolutions
+
+A vector of [`ParticularSolution`](@ref)s whose fields are summed. Accepted anywhere a
+single `ParticularSolution` is (e.g. as the `particular_solution` of a [`Simulation`](@ref)).
+"""
+const ParticularSolutions = AbstractVector{<:ParticularSolution}
+
+# a single ParticularSolution or a vector of them (whose fields are summed)
+const AnyParticularSolution = Union{ParticularSolution, ParticularSolutions}
+
+"""
     TikhonovSolver{T<:Real} <: AbstractSolver
 
 Tikhonov regularization solver for MFS.
@@ -38,69 +49,68 @@ struct TikhonovSolver{T<:Real} <: AbstractSolver
 end
 
 """
-    BayesianSolver{T<:Real} <: AbstractSolver
+    Simulation{S,Dim,P,PS,BD}
 
-Bayesian solver for MFS.
+An MFS problem: a `medium`, the `boundary_data` to be matched, a `solver`, and the MFS
+`source_positions` (the columns of the system matrix). The angular frequency ω is taken
+from the `medium`, not stored separately.
 
-# Parameters
-- `prior::P`: The prior distribution for the solution
-The solution is the posterior distribution over the coefficients given the boundary data and the prior. 
+`boundary_data` may be a single [`BoundaryData`](@ref), or a `Tuple` of `BoundaryData` that
+share the same `source_positions` but impose different boundary conditions on (possibly)
+different points — e.g. traction on part of the boundary and displacement on another. Each
+`BoundaryData` in the tuple contributes its own block of rows to the system matrix, stacked
+in the order given.
+
+`particular_solution` may be a single [`ParticularSolution`](@ref) or a vector of them
+([`ParticularSolutions`](@ref)), in which case their fields are summed.
 """
-struct BayesianSolver{P<:ContinuousMultivariateDistribution} <: AbstractSolver
-    prior::P
-    optimise_source_positions_flag::Bool 
-    use_greens_gradient_analytical_flag::Bool
-    gradient_tol::Float64
-    objective_function_tol::Float64
-    max_iters::Int  
-end
-
-function BayesianSolver(
-    prior::ContinuousMultivariateDistribution; 
-    optimise_source_positions_flag::Bool = false, 
-    use_greens_gradient_analytical_flag::Bool = true,
-    gradient_tol::Float64 = 1e-3,
-    objective_function_tol::Float64 = 1e-4,
-    max_iters::Int = 50
-)
-    return BayesianSolver{typeof(prior)}(prior, optimise_source_positions_flag, use_greens_gradient_analytical_flag, gradient_tol, objective_function_tol, max_iters)
-end
-
-struct Simulation{S <: AbstractSolver, Dim, P<:PhysicalMedium{Dim}, PS <:ParticularSolution, BD <: BoundaryData}
+struct Simulation{S <: AbstractSolver, Dim, P<:PhysicalMedium{Dim}, PS <: AnyParticularSolution, BD}
     solver::S
     medium::P
     boundary_data::BD
     particular_solution::PS
     source_positions::Vector{SVector{Dim,Float64}}
-    ω::Float64
 end
 
-function Simulation(medium::P, bd::BD; 
-        solver::S = TikhonovSolver(),
-        particular_solution::PS = NoParticularSolution(),
-        source_positions = source_positions(bd; relative_source_distance = 1.2),
-        ω::Float64 = 2pi * 1.0 
-    ) where {
-        S <: AbstractSolver, Dim, 
-        P <: PhysicalMedium{Dim}, PS <: ParticularSolution, 
-        BD <: BoundaryData{<:FieldType,Dim}
-    }
+# treat a lone BoundaryData as a one-element tuple so the assembly code is written once
+_as_tuple(bd::BoundaryData) = (bd,)
+_as_tuple(bds::Tuple) = bds
 
-    return Simulation{S,Dim,P,PS,BD}(solver, medium, bd, particular_solution, source_positions, ω)
+function Simulation(medium::P, bd::BoundaryData{<:FieldType,Dim};
+        solver::AbstractSolver = TikhonovSolver(),
+        particular_solution::AnyParticularSolution = NoParticularSolution(),
+        source_positions = source_positions(bd; relative_source_distance = 1.2),
+    ) where {Dim, P <: PhysicalMedium{Dim}}
+
+    sp = [SVector{Dim, Float64}(p) for p in source_positions]
+    return Simulation(solver, medium, bd, particular_solution, sp)
+end
+
+function Simulation(medium::P, bds::Tuple{Vararg{BoundaryData{<:FieldType,Dim}}};
+        solver::AbstractSolver = TikhonovSolver(),
+        particular_solution::AnyParticularSolution = NoParticularSolution(),
+        source_positions = source_positions(bds; relative_source_distance = 1.2),
+    ) where {Dim, P <: PhysicalMedium{Dim}}
+
+    sp = [SVector{Dim, Float64}(p) for p in source_positions]
+    return Simulation(solver, medium, bds, particular_solution, sp)
 end
 
 system_matrix(sim::Simulation) = system_matrix(sim.source_positions, sim.medium, sim.boundary_data)
 
+# a tuple of BoundaryData stacks its blocks vertically; all blocks share the same columns
+function system_matrix(source_pos::AbstractVector{<:SVector}, medium::PhysicalMedium, bds::Tuple)
+    return reduce(vcat, map(bd -> system_matrix(source_pos, medium, bd), bds))
+end
+
 function system_matrix(
-    source_positions::AbstractVector{<:SVector{Dim}}, 
+    source_pos::AbstractVector{<:SVector{Dim}}, 
     medium::P, 
     bd::BoundaryData
 ) where {Dim, P<:PhysicalMedium{Dim}}
 
-    points = bd.boundary_points isa AbstractMvNormal ? 
-          struct_points(bd.boundary_points, Dim) : 
-          bd.boundary_points
-    normals = bd.outward_normals
+    points = mean_points(bd)
+    normals = mean_normals(bd)
 
     # The comprehension block automatically handles the return type
     Ms = [
@@ -115,12 +125,14 @@ function system_matrix(
             normal_vec = SVector{Dim, NumType}(normals[i])
             
             # 4. Call greens. Now r_vec and normal_vec share the exact same type!
-            greens(bd.fieldtype, medium, r_vec, normal_vec)    
+            greens(bd.fieldtype, medium, r_vec, normal_vec)
         end
-        for i in eachindex(points), x in source_positions
+        for i in eachindex(points), x in source_pos
     ]
 
-    return Matrix(mortar(Ms))
+    Ms = (typeof(Ms[1]) <: AbstractMatrix) ? Matrix(mortar(Ms)) : Ms
+    
+    return Ms
 end
 
 
@@ -130,12 +142,9 @@ function system_matrix_gradient(
     bd::BoundaryData
 ) where {Dim, P<:PhysicalMedium{Dim}}
 
-    points = bd.boundary_points isa AbstractMvNormal ? 
-          struct_points(bd.boundary_points, Dim) : 
-          bd.boundary_points
-          
-    normals = bd.outward_normals
-    
+    points = mean_points(bd)
+    normals = mean_normals(bd)
+
     n_sensors = length(points)
     n_sources = length(source_positions)
 
@@ -157,8 +166,10 @@ function system_matrix_gradient(
     N = n_sensors * d_m_out
     K = n_sources * d_m_in
 
-    # 3. Preallocate the flattened (N, K, Dim) array using the statically known NumType
-    grad_M = zeros(NumType, N, K, Dim)
+    # 3. Preallocate the flattened (N, K, Dim) array. The element type follows the kernel as
+    #    well as the geometry: complex physics (e.g. acoustics) has a complex gradient even
+    #    though the points and sources are real.
+    grad_M = zeros(promote_type(NumType, eltype(G_sample)), N, K, Dim)
     
     # --- MATRIX ASSEMBLY ---
     for j in 1:n_sources
@@ -191,70 +202,63 @@ end
 
 system_matrix_gradient(sim::Simulation) = system_matrix_gradient(sim.source_positions, sim.medium, sim.boundary_data)
 
+# a tuple of BoundaryData stacks its gradient blocks along the row dimension
+function system_matrix_gradient(source_pos::AbstractVector{<:SVector}, medium::PhysicalMedium, bds::Tuple)
+    blocks = map(bd -> system_matrix_gradient(source_pos, medium, bd), bds)
+    return reduce((a, b) -> cat(a, b; dims = 1), blocks)
+end
+
 function solve(medium::P, bd::BoundaryData; kwargs... ) where P <: PhysicalMedium
     sim = Simulation(medium, bd; kwargs...)
     return solve(sim)
+end
+
+"""
+    boundary_forcing(sim::Simulation)
+
+The right-hand side that `sim`'s fundamental solution must match on the boundary: the
+(flattened) boundary `fields` minus the contribution of the `particular_solution`. For a
+tuple `boundary_data` the blocks are stacked in the same order as [`system_matrix`](@ref).
+"""
+function boundary_forcing(sim::Simulation)
+    bds = _as_tuple(sim.boundary_data)
+    fields = reduce(vcat, map(bd -> flat_fields(bd.fields), bds))
+    particular = reduce(vcat,
+        map(bd -> vcat(field(sim.medium, bd, sim.particular_solution)...), bds))
+    return fields - particular
+end
+
+# Regularised least-squares solve of `M * coes = forcing`, shared by the single-domain and
+# transmission solvers. Returns the coefficients, the relative boundary error and cond(M).
+function tikhonov_solve(M::AbstractMatrix, forcing::AbstractVector, solver::TikhonovSolver)
+    condM = cond(M)
+    sqrtλ = solver.λ < zero(eltype(solver.λ)) ?
+        condM * sqrt(solver.tolerance) :
+        sqrt(solver.λ)
+
+    bigM = [M; sqrtλ * I]
+    coes = bigM \ [forcing; zeros(size(M)[2])]
+
+    relative_error = norm(M * coes - forcing) / norm(forcing)
+
+    return coes, relative_error, condM
 end
 
 # Implement Tikhonov solver
 function solve(sim::Simulation{TikhonovSolver{T}}) where T
 
     M = system_matrix(sim)
+    forcing = boundary_forcing(sim)
 
-    forcing = vcat(sim.boundary_data.fields...)
-    forcing_particular = field(sim.medium, sim.boundary_data, sim.particular_solution)
-    forcing = forcing - vcat(forcing_particular...)
-    
-    # Tikinov solution
-    condM = cond(M)
-    sqrtλ = if sim.solver.λ < zero(eltype(sim.solver.λ)) 
-        condM * sqrt(sim.solver.tolerance)
-    else sqrt(sim.solver.λ)
-    end
+    coes, relative_error, condM = tikhonov_solve(M, forcing, sim.solver)
 
-    bigM = [M; sqrtλ * I];
-    coes = bigM \ [forcing; zeros(size(M)[2])]
+    @info "Solved the system with condition number $(condM), and with a relative error of the boundary data of $(relative_error), using the tolerance $(sim.solver.tolerance)"
 
-    relative_error = norm(M * coes - forcing) / norm(forcing)
-
-    println("Solved the system with condition number:$(condM), and with a relative error of boundary data: $(norm(M * coes - forcing) / norm(forcing)) with a tolerance of $(sim.solver.tolerance)")
-
-    return FundamentalSolution(sim.medium; 
+    return FundamentalSolution(sim.medium;
         positions = sim.source_positions,
-        coefficients = coes, 
+        coefficients = coes,
         particular_solution = sim.particular_solution,
         relative_boundary_error = relative_error
-    )
-end
-
-function solve(
-    sim::Simulation{<:BayesianSolver{<:AbstractMvNormal}, Dim}
-    ) where {Dim}
-    
-    # 1. Determine Source Positions (chi)
-    if sim.solver.optimise_source_positions_flag
-        println("Optimizing source positions...")
-        best_source_positions = optimise_source_positions(sim)
-    else
-        best_source_positions = vcat(sim.source_positions...)
-    end
-
-    # 2. Compute Posterior Coefficients
-    μ_post, Σ_post = compute_coefficient_posterior(
-            sim, best_source_positions
-        )
-    
-    new_source_positions = [
-    SVector{Dim, Float64}(best_source_positions[i : i + Dim - 1]) 
-    for i in 1:Dim:length(best_source_positions)
-    ]
-    # 3. Return the solution
-    return FundamentalSolution(
-        sim.medium; 
-        positions = new_source_positions,
-        coefficients = μ_post, 
-        coefficients_covariance = Σ_post,
-        particular_solution = sim.particular_solution
     )
 end
 
@@ -266,25 +270,70 @@ Return source positions for MFS from some `BoundaryData`.
 
 - α: scale factor for the distance of the source from the boundary d = α * h, where h is the average distance between consecutive points on the boundary.
 """
-function source_positions(cloud::BoundaryData; relative_source_distance = 1.0) 
+function source_positions(cloud::Union{BoundaryShape, BoundaryData}; relative_source_distance = 1.0)
 
-    points = cloud.boundary_points 
-    len = points |> length
-    
-    # Note this could be calculated at the same time as the outward normals. But that would make the code quite ugly!
-    # Sample just a few number of points to approximate the distance between neighbours
-    sampled_rng = LinRange(1,len, min(6,len)) .|> round .|> Int
-    neighbors_dists = map(points[sampled_rng]) do p 
-        dists = [norm(p - q) for q in points]
-        idx = sortperm(dists)[2:min(3, len)]
-        mean(dists[idx])
-    end
-    source_distance = mean(neighbors_dists) * relative_source_distance
-    
-    positions = map(cloud.boundary_points |> eachindex) do i
-        cloud.boundary_points[i] + cloud.outward_normals[i] .* source_distance 
+    points = mean_points(cloud)
+    normals = mean_normals(cloud)
+
+    source_distance = _boundary_spacing(points) * relative_source_distance
+
+    positions = map(eachindex(points)) do i
+        points[i] + normals[i] .* source_distance
     end
 
     # Occasionally the normal direction is wrong. In which case, do not add a source inside the body!
     return filter(p -> p ∉ cloud, positions)
+end
+
+"""
+    source_positions(bds::Tuple; relative_source_distance = 1.0)
+
+Source positions shared by a tuple of [`BoundaryData`](@ref). The boundary conditions in
+`bds` all use the same MFS sources (columns), so the sources are placed relative to the
+union of their boundaries. See the single-argument [`source_positions`](@ref).
+"""
+function source_positions(bds::Tuple{Vararg{Union{BoundaryShape, BoundaryData}}}; relative_source_distance = 1.0)
+
+    _interior(bd::BoundaryData) = bd.boundary_shape.interior_points
+    _interior(shape::BoundaryShape) = shape.interior_points
+
+    points = reduce(vcat, map(mean_points, bds))
+    normals = reduce(vcat, map(mean_normals, bds))
+    interiors = reduce(vcat, map(_interior, bds))
+
+    combined = BoundaryShape(
+        boundary_points = points,
+        normals = normals,
+        interior_points = interiors
+    )
+
+    return source_positions(combined; relative_source_distance = relative_source_distance)
+end
+
+"""
+    grid_source_positions(bd::BoundaryData; n = 15, scale = 2.0, clearance = 1.0)
+
+Candidate MFS source positions "everywhere": a regular `n × n` grid covering the bounding
+box of the boundary enlarged by `scale`, keeping only points outside the domain and further
+than `clearance` times the average boundary spacing from the boundary. Intended as an
+overcomplete set of candidates for a [`VariationalBayesianSolver`](@ref), which selects the
+useful sources one at a time. See also [`source_positions`](@ref), which instead places one
+source behind every boundary point.
+"""
+function grid_source_positions(bd::BoundaryData{F, 2}; n::Int = 15, scale::Real = 2.0, clearance::Real = 1.0) where F
+    pts = mean_points(bd)
+
+    xs = [p[1] for p in pts]; ys = [p[2] for p in pts]
+    centre = SVector((minimum(xs) + maximum(xs)) / 2, (minimum(ys) + maximum(ys)) / 2)
+    halfwidth = SVector(maximum(xs) - minimum(xs), maximum(ys) - minimum(ys)) ./ 2
+
+    spacing = _boundary_spacing(pts)
+
+    grid = [
+        centre + SVector(2u - 1, 2v - 1) .* (scale .* halfwidth)
+    for u in LinRange(0, 1, n), v in LinRange(0, 1, n)]
+
+    return filter(vec(grid)) do p
+        p ∉ bd && minimum(norm(p - q) for q in pts) > clearance * spacing
+    end
 end

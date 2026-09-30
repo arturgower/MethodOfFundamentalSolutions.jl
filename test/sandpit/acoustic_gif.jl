@@ -30,7 +30,7 @@ interior_points = [[0.0, 0.0]]
 bd = BoundaryData(TractionType(); 
     boundary_points = bd_points, 
     fields = bd_fields, 
-    outward_normals = normals,
+    normals = normals,
     interior_points = interior_points
 )
     

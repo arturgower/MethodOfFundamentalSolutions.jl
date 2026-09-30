@@ -9,29 +9,32 @@ import RecipesBase: is_key_supported
 is_key_supported(::Any...) = true
 
 @testset "Plot recipes" begin
-    # Test PointCloud recipe
-    @testset "PointCloud recipe" begin
-        # Create a simple PointCloud
+    # Test BoundaryShape / BoundaryData recipes
+    @testset "BoundaryShape recipe" begin
         bs = [[0.0,0.0], [1.0,0.0], [0.0,1.0]]
         ns = [[1.0,0.0], [0.0,1.0],[-1.0,-1.0]]
         is = [[0.5,0.5]]
 
-        cloud = BoundaryData(DisplacementType(); 
+        cloud = BoundaryData(DisplacementType();
             boundary_points = bs,
-            outward_normals=ns,
+            normals=ns,
             interior_points=is
         )
-        
+
         # Test boundary points series
-        plt = RecipesBase.apply_recipe(Dict{Symbol,Any}(), cloud)[1]
+        plt = RecipesBase.apply_recipe(Dict{Symbol,Any}(), cloud.boundary_shape)[1]
         boundary_series = plt.plotattributes
         @test boundary_series[:seriestype] == :scatter
         @test boundary_series[:label] == "Boundary points"
-        
+
         # Test normals (quiver) series
-        plt = RecipesBase.apply_recipe(Dict{Symbol,Any}(), cloud)[3]
+        plt = RecipesBase.apply_recipe(Dict{Symbol,Any}(), cloud.boundary_shape)[3]
         normal_series = plt.plotattributes
         @test normal_series[:seriestype] == :quiver
+
+        # The BoundaryData recipe delegates to its boundary_shape
+        plt = RecipesBase.apply_recipe(Dict{Symbol,Any}(), cloud)[1]
+        @test plt.args == (cloud.boundary_shape,)
     end
 
     # Test FieldResult recipe

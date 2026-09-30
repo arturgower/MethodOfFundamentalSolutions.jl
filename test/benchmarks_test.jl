@@ -33,7 +33,7 @@
         BoundaryData(TractionType();
             boundary_points = points,
             fields = fields, 
-            outward_normals = normals, 
+            normals = normals, 
             interior_points = interior_points
         )
     end
@@ -124,7 +124,7 @@ end
     bd = BoundaryData(TractionType(); 
         boundary_points = points, 
         fields = traction, 
-        outward_normals = normals
+        normals = normals
     );
 
     # need to specify the particular solution for gravity loading

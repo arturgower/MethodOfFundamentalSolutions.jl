@@ -1,14 +1,16 @@
-# recipe for plotting a PointCloud. Assumes 2D boundary_points 
-@recipe function plot(cloud::BoundaryData; fields = false, boundary_points = true, outward_normals = true, interior_points = true)
+# recipe for plotting a BoundaryShape. Assumes 2D boundary points. The boundary points and
+# the normals may each be a plain vector of vectors, a single `MvNormal` over the flattened
+# values, or a vector of `MvNormal`s (one per point); the mean is plotted, and when the
+# boundary points carry a covariance it is drawn as position error bars.
+@recipe function plot(shape::BoundaryShape{Dim}; boundary_points = true, normals = true, interior_points = true) where Dim
     # Set default attributes
     markershape --> :circle
     legend --> false
     aspect_ratio --> 1.0
 
-    bs = cloud.boundary_points
-    ns = cloud.outward_normals
-    is = cloud.interior_points
-    fs = cloud.fields
+    bs = mean_points(shape)
+    ns = mean_normals(shape)
+    is = shape.interior_points
 
     # used to determine the length to plot the vectors
     lengthscale = mean([norm(b - mean(bs)) for b in bs])
@@ -18,30 +20,19 @@
     ix = [b[1] for b in is]
     iy = [b[2] for b in is]
 
-    fx = [b[1] for b in fs]
-    fy = [b[2] for b in fs]
-
-    f_lengthscale = mean([norm(f) for f in fs]) > 0 ? mean([norm(f) for f in fs]) : 1.0
-    fx = fx .* (lengthscale/4) ./ (sqrt(2.0) * f_lengthscale)
-    fy = fy .* (lengthscale/4) ./ (sqrt(2.0) * f_lengthscale)
-
-    nx = [b[1] for b in ns]
-    ny = [b[2] for b in ns]
-
-    nx = nx .* (lengthscale/4)
-    ny = ny .* (lengthscale/4)
-
-    # fallback: repeat or zero-length normals
-    if length(nx) != length(bx)
-        nx = zeros(length(bx))
-        ny = zeros(length(by))
-    end
+    # position uncertainty: the per-point standard deviations from the boundary covariance
+    Σx = cov(shape.boundary_points)
+    point_std = Σx isa UniformScaling ? nothing : sqrt.(max.(diag(Σx), 0.0))
 
     if boundary_points
     @series begin
         label --> "Boundary points"
         seriestype --> :scatter
         markersize --> 4.0
+        if point_std !== nothing
+            xerror --> [point_std[(i - 1) * Dim + 1] for i in eachindex(bs)]
+            yerror --> [point_std[(i - 1) * Dim + 2] for i in eachindex(bs)]
+        end
         (bx, by)
     end
     end
@@ -55,7 +46,14 @@
     end
     end
 
-    if outward_normals
+    if normals
+        nx = [b[1] for b in ns] .* (lengthscale / 4)
+        ny = [b[2] for b in ns] .* (lengthscale / 4)
+        # fallback: repeat or zero-length normals
+        if length(nx) != length(bx)
+            nx = zeros(length(bx))
+            ny = zeros(length(by))
+        end
         @series begin
             label --> ""
             color --> :black
@@ -66,16 +64,38 @@
             (bx, by)
         end
     end
+end
 
+# recipe for plotting a BoundaryData: its BoundaryShape, plus (with fields = true) a quiver
+# of the mean field. Keywords of the BoundaryShape recipe (boundary_points, normals,
+# interior_points) pass through.
+@recipe function plot(cloud::BoundaryData; fields = false)
+    legend --> false
+    aspect_ratio --> 1.0
+
+    @series cloud.boundary_shape
+
+    # quiver of the mean field, for vector-valued fields only (a scalar field has no
+    # direction to draw)
     if fields
-        @series begin
-            label --> ""
-            color --> :green
-            seriestype --> :quiver
-            quiver --> (fx, fy)
-            marker = :none           # remove marker symbol at arrow tips
-            markersize --> 0.0          # fallback to ensure no marker is drawn
-            (bx, by)
+        bs = mean_points(cloud)
+        lengthscale = mean([norm(b - mean(bs)) for b in bs])
+        fmean = flat_fields(cloud.fields)
+        FD = length(fmean) ÷ length(bs)
+        if FD >= 2
+            fs = [fmean[(i - 1) * FD .+ (1:2)] for i in eachindex(bs)]
+            f_lengthscale = mean(norm.(fs)) > 0 ? mean(norm.(fs)) : 1.0
+            fx = [f[1] for f in fs] .* (lengthscale / 4) ./ (sqrt(2.0) * f_lengthscale)
+            fy = [f[2] for f in fs] .* (lengthscale / 4) ./ (sqrt(2.0) * f_lengthscale)
+            @series begin
+                label --> ""
+                color --> :green
+                seriestype --> :quiver
+                quiver --> (fx, fy)
+                marker = :none           # remove marker symbol at arrow tips
+                markersize --> 0.0          # fallback to ensure no marker is drawn
+                ([b[1] for b in bs], [b[2] for b in bs])
+            end
         end
     end
 end
@@ -129,6 +149,93 @@ end
     end
 end
 
+# Sample and plot the field of a fundamental solution over the interior of `bd`, then
+# overlay the source points. The heatmap is produced by delegating to the FieldResult
+# recipe below; see [`predict_field`](@ref) for the keyword arguments.
+@recipe function plot(fsol::FundamentalSolution, bd::BoundaryData;
+        xres = 30, yres = 30, normal_vec = nothing, field_apply = identity, sources = true)
+
+    aspect_ratio --> 1.0
+    legend --> false
+
+    fr = predict_field(fsol, bd;
+        xres = xres, yres = yres, normal_vec = normal_vec, field_apply = field_apply)
+
+    @series begin
+        seriestype := :heatmap
+        region_shape := bd
+        fr
+    end
+
+    if sources
+        @series begin
+            label --> "Source points"
+            seriestype := :scatter
+            markersize --> 4.0
+            markercolor --> :red
+            ([p[1] for p in fsol.positions], [p[2] for p in fsol.positions])
+        end
+    end
+end
+
+# Per-source prior standard deviation 1/√αᵢ learned by the variational solver, one value per
+# source (averaged over the field/real-imaginary degrees of freedom of each source). A large
+# value marks a relevant source, a small one a source ARD has switched off.
+function _source_prior_std(vsol::VariationalSolution)
+    pos = vsol.fsol.positions
+    n_src = length(pos)
+    α = vsol.prior_precisions
+    per = max(1, length(α) ÷ n_src)
+    src_std = [sqrt(mean(1 ./ α[(j - 1) * per + 1:j * per])) for j in 1:n_src]
+    return [p[1] for p in pos], [p[2] for p in pos], src_std
+end
+
+# Scatter of the learned source positions, sized and coloured by their prior standard
+# deviation 1/√αᵢ (the ARD relevance): the location and the variance of the sources.
+@recipe function plot(vsol::VariationalSolution)
+    aspect_ratio --> 1.0
+    colorbar_title --> "prior std  1/√α"
+
+    sx, sy, src_std = _source_prior_std(vsol)
+    ms = 4.0 .+ 8.0 .* src_std ./ max(maximum(src_std), eps())
+
+    @series begin
+        seriestype := :scatter
+        label --> "sources (size, colour ∝ prior std)"
+        marker_z := src_std
+        markersize := ms
+        seriescolor --> :viridis
+        (sx, sy)
+    end
+end
+
+# The variational field over the interior of `bd`, with the learned sources overlaid and
+# sized/coloured by their prior standard deviation.
+@recipe function plot(vsol::VariationalSolution, bd::BoundaryData;
+        xres = 30, yres = 30, normal_vec = nothing, field_apply = real)
+
+    aspect_ratio --> 1.0
+    legend --> false
+
+    fr = predict_field(vsol.fsol, bd;
+        xres = xres, yres = yres, normal_vec = normal_vec, field_apply = field_apply)
+
+    @series begin
+        seriestype := :heatmap
+        region_shape := bd
+        fr
+    end
+
+    sx, sy, src_std = _source_prior_std(vsol)
+    ms = 4.0 .+ 8.0 .* src_std ./ max(maximum(src_std), eps())
+    @series begin
+        seriestype := :scatter
+        label --> "sources (size ∝ prior std)"
+        markersize := ms
+        markercolor --> :red
+        (sx, sy)
+    end
+end
 
 
 # Plot the result in space (across all x) for a specific angular frequency

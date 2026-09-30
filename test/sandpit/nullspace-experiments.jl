@@ -20,7 +20,7 @@ medium = Elastostatic(2; ρ = 1.0, cp = 2.0, cs = 1.0)
     σrθ(r, θ) = 2 * sin(2θ)
     bds = map(θs_arr) do θs
         points = [[r*cos(θ), r*sin(θ)] for θ in θs]
-        outward_normals = [[cos(θ), sin(θ)] for θ in θs]
+        normals = [[cos(θ), sin(θ)] for θ in θs]
         interior_points = [[0.0, 0.0]]
 
         # WRRRROOONG needs the basis vectors
@@ -28,7 +28,7 @@ medium = Elastostatic(2; ρ = 1.0, cp = 2.0, cs = 1.0)
         BoundaryData(TractionType(); 
             boundary_points = points, 
             fields = fields, 
-            outward_normals = outward_normals,
+            normals = normals,
             interior_points = interior_points
         )
     end
