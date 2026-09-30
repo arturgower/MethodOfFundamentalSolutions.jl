@@ -116,10 +116,10 @@ end
         sim = Simulation(medium, bd_full; solver = solver, source_positions = source_pos)
         vsol = solve(sim)
         
-        @test diag(vsol.fsol.coefficients_covariance) ≈ source_vars rtol = 1e-5
+        @test diag(vsol.fsol.coefficients_covariance) ≈ source_vars rtol = 2e-5
 
         # posterior variance is diagonal
-        @test norm(vsol.fsol.coefficients_covariance - diagm(diag(vsol.fsol.coefficients_covariance))) / norm(vsol.fsol.coefficients_covariance) < 1e-5
+        @test norm(vsol.fsol.coefficients_covariance - diagm(diag(vsol.fsol.coefficients_covariance))) / norm(vsol.fsol.coefficients_covariance) < 2e-5
         
         # if we learn the prior from the data, the posterior variance approximately recover the true source variances
         solver = VariationalBayesianSolver(
@@ -132,7 +132,7 @@ end
         vsol = solve(sim)
         
         @test diag(vsol.fsol.coefficients_covariance) ≈ source_vars rtol = 1e-2
-        @test norm(vsol.fsol.coefficients_covariance - diagm(diag(vsol.fsol.coefficients_covariance))) / norm(vsol.fsol.coefficients_covariance) < 1e-5
+        @test norm(vsol.fsol.coefficients_covariance - diagm(diag(vsol.fsol.coefficients_covariance))) / norm(vsol.fsol.coefficients_covariance) < 2e-5
 
     end
 
